@@ -8148,6 +8148,22 @@ fn deferred_test_markers(ir: Value) -> Vec<String> {
     return out;
 }
 
+fn namespaced_key_markers(ir: Value) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for c in value_list(value_field(ir.clone(), String::from("components"))) {
+        let cname = value_str(value_field(c.clone(), String::from("name")));
+        for table in vec![String::from("requires"), String::from("provides")] {
+            for k in value_keys(value_field(c.clone(), table)) {
+                let mark = format!("<<UNSUPPORTED-NAMESPACED-KEY:{}.{}>>", cname, k);
+                if ((k.revl_index_of("::") >= 0i64) && (!list_contains(out.clone(), mark.clone()))) {
+                    out.push(mark.clone());
+                }
+            }
+        }
+    }
+    return out;
+}
+
 pub fn emit_rust_src(ir: Value) -> String {
     let types = value_field(ir.clone(), String::from("types"));
     let tables = build_type_tables(types.clone());
@@ -8212,6 +8228,7 @@ pub fn emit_rust_src(ir: Value) -> String {
     }
     out = (out.revl_concat(&deferred_emission_markers(ir.clone()))).revl_concat(&validated_markers(ir.clone()));
     out = (out.revl_concat(&host_key_collision_markers(ir.clone()))).revl_concat(&required_stream_markers(ir.clone()));
+    out.extend((namespaced_key_markers(ir.clone())).iter().cloned());
     return rstrip__m1(&(out.revl_join(&newline()))).revl_concat(&newline());
 }
 
