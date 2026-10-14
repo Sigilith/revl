@@ -1253,6 +1253,18 @@ answer carries the `"disk": {"inSync", "stale"}` block (issue #2037): when disk
 still holds the change the rollback retracted, `stale` names it and a `note`
 points at `revl_export`.
 
+The rollback restarts the previous generation cold: a `handoff` is not run in
+reverse, so live state is not carried back. The answer carries a
+`"stateDropped": {"components", "note"}` block (issue #2424): the `components`
+and `note` members of the `revl_undo` dossier's `stateDropped`. `components`
+names every component that held live state (a provider whose frame holds
+state, or a template with a live instance that does) and every component the
+restored generation no longer has. `note` says what was lost, and is absent
+when the live state was read and nothing was lost. If the live state cannot be
+read, `note` says so and the rollback still runs. A rollback the activation
+gate refuses after the teardown restarts the running generation cold too: the
+refusal carries `stateDropped` for the state that restart discarded.
+
 ### `revl_undo`
 
 Return to an earlier generation through the retained generation history - the

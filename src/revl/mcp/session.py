@@ -2426,11 +2426,69 @@ class Session:
         # operator retries it (item 372's activation health gate refuses a
         # rollback to a generation that no longer activates).
         restored, restored_origin = self.previous, self.previous_origin
+        # what the cold start below discards, read BEFORE it runs (issue
+        # #2424): afterwards the live state is already gone.
+        held, unread = self._live_state_or_reason()
+        withdrawn = (set(self._component_names(self.ir))
+                     - set(self._component_names(restored)))
+        generation = self._generation
         # rollback restores the *code* of the previous generation; it keeps
         # today's teardown semantics for instances (no cross-generation state
         # migration back), so it stays byte-identical to the pre-item-10 path.
-        return self.swap(restored, origin=restored_origin,
-                         migrate="respawn") | {"rolledBack": True}
+        try:
+            result = self.swap(restored, origin=restored_origin,
+                               migrate="respawn")
+        except SessionError as error:
+            # The generation counter moves at the teardown and nowhere before
+            # it, so a refusal that left it alone left the running generation
+            # untouched. One that moved it (the activation gate, a failed
+            # reload) rebooted the generation that was running, cold: its live
+            # state is gone although the rollback was refused, and the error
+            # says so (the verb attaches it to the answer). Nothing was
+            # withdrawn: the reloaded generation is the one that was running.
+            if self._generation != generation:
+                error.state_dropped = self._rollback_state_dropped(
+                    held, unread, set(), refused=True)
+            raise
+        return result | {
+            "rolledBack": True,
+            "stateDropped": self._rollback_state_dropped(held, unread, withdrawn)}
+
+    def _live_state_or_reason(self) -> tuple[list[str], str | None]:
+        """The components holding live state, or why that could not be read:
+        a report, never a fault (issue #2424)."""
+        try:
+            return self.live_state_components(), None
+        except Exception as exc:  # noqa: BLE001 - a report, never a fault
+            return [], f"{type(exc).__name__}: {exc}"
+
+    @staticmethod
+    def _rollback_state_dropped(held: list[str], unread: str | None,
+                                withdrawn: set[str], *,
+                                refused: bool = False) -> dict:
+        """The rollback's `stateDropped` (issue #2424): the `components` and
+        `note` members of the undo dossier's (`_undo_state_dropped`).
+        `components` names every running component the rollback takes down
+        with live state, or that the restored generation no longer has. A
+        rollback re-admits through `respawn`, a cold start that carries none of
+        the generation it leaves (the F4 rule in `swap`). `note` is absent when
+        the live state was read and nothing was lost. `refused` is a rollback
+        the swap refused after its teardown: the running generation came back
+        cold, so the state is gone all the same."""
+        out = {"components": sorted(withdrawn | set(held))}
+        if held:
+            out["note"] = undo_cold_start_note(held, None, done=True,
+                                               tool="revl_rollback")
+            if refused:
+                out["note"] += (
+                    " The rollback itself was refused: the generation that "
+                    "was running was restarted cold in place.")
+        elif unread is not None:
+            out["note"] = (
+                f"the running components' live state could not be read "
+                f"({unread}), so a component whose state this cold start drops "
+                f"may be missing from `components`")
+        return out
 
     # -- the live SLO producer (roadmap item 473, issue #825) --------------
     #

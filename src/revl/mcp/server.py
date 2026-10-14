@@ -2224,7 +2224,11 @@ def _tool_rollback(_arguments: dict) -> dict:
     try:
         return {"ok": True, **SESSION.rollback()}
     except SessionError as error:
-        return _session_error(error)
+        # a rollback refused after its teardown restarted the running
+        # generation cold, and says which state that dropped (issue #2424)
+        dropped = getattr(error, "state_dropped", None)
+        return _session_error(error, **({"stateDropped": dropped}
+                                        if dropped else {}))
 
 
 def _tool_undo(arguments: dict) -> dict:
@@ -4593,7 +4597,13 @@ TOOLS = [
                        "swap. The answer carries a `disk` block (issue #2037): "
                        "when disk still holds the change this retracted, it names "
                        "the stale path and points at `revl_export`, the one verb "
-                       "that writes the reverted source out.",
+                       "that writes the reverted source out. The restored "
+                       "generation starts cold, so the answer also carries "
+                       "`stateDropped` (issue #2424): `components` names each "
+                       "component whose live state was discarded and each "
+                       "component the restored generation withdraws, with a "
+                       "`note` when state was lost. A rollback refused after "
+                       "its teardown carries it too.",
         "inputSchema": {"type": "object", "properties": {}},
         "annotations": {"readOnlyHint": False, "destructiveHint": True},
         "handler": _tool_rollback,
