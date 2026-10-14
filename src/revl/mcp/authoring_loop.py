@@ -66,7 +66,8 @@ def step_label(verb: str) -> str:
     raise KeyError(verb)
 
 
-def self_check(diagnostics: list[dict] | None, holes: list | None = None) -> dict:
+def self_check(diagnostics: list[dict] | None, holes: list | None = None,
+               unmet: list | None = None) -> dict:
     """Every guarantee G1-G9, from one compile.
 
     `diagnostics` is None when the compile succeeded: the checker enforces
@@ -77,6 +78,15 @@ def self_check(diagnostics: list[dict] | None, holes: list | None = None) -> dic
     checker did not make. Refusals under any other code (a type error, an
     extended guarantee, an amendment) are listed in `otherFailures`, so a
     green G-row is never read past a red one elsewhere.
+
+    `unmet` is `unmet_requirements(ir)` of the compiled composition (issue
+    #2386). It is a warning, not a verdict: `admissible` does not read it. A
+    requirement no revl component provides is legitimate, because a host
+    service, a `--providers` model host, a placement remote or a non-revl
+    provider can meet it at run time (`examples/app/notes.rvl`'s `webui`,
+    issue #1751). It is listed in `unmetRequirements` with a note, because in
+    this MCP session, which supplies none of those, the component would stay
+    PENDING and a swap that adds it would be refused.
     """
     compiled = diagnostics is None
     failing: dict[str, list[dict]] = {}
@@ -107,21 +117,121 @@ def self_check(diagnostics: list[dict] | None, holes: list | None = None) -> dic
         "fail": sum(r["status"] == "fail" for r in rows),
         "unchecked": sum(r["status"] == "unchecked" for r in rows),
     }
+    unmet = list(unmet or []) if compiled else []
     result = {
         "admissible": compiled and open_holes == 0,
         "guarantees": rows,
         "summary": summary,
         "otherFailures": other,
     }
+    if unmet:
+        result["unmetRequirements"] = unmet
     if compiled and open_holes:
         result["note"] = (f"every guarantee holds on this draft, but {open_holes} "
                           "open hole(s) keep it out of a running composition "
                           "(T3); fill them with revl_edit")
+        if unmet:
+            result["note"] += ". " + _unmet_note(unmet)
+    elif unmet:
+        result["note"] = _unmet_note(unmet)
     elif not compiled and summary["unchecked"]:
         result["note"] = ("the compile refused before it could prove the "
                           "`unchecked` guarantees; fix the failures and "
                           "re-run revl_check")
     return result
+
+
+def unmet_requirements(ir: dict) -> list[dict]:
+    """Every `requires` key that no component of the compiled composition
+    provides (issue #2386), one record per (component, key) in source order.
+
+    The compiler admits such a requirement, and so does `admissible`: a host
+    service, a `--providers` model host, a placement remote or a later load can
+    provide the key. This MCP session supplies none of those, so the list is
+    the warning that the component would stay PENDING here. A key any
+    component provides counts as met, in any realm and a template's provision
+    included: the compiler already checks a realm route (item 162), and a false
+    report here would be worse than a missed one. Each record carries a `fix`
+    that names the key and, when another component provides the same service
+    under a different key, that key: the usual slip is requiring a service by
+    its name, or requiring the service the component itself provides."""
+    components = ir.get("components") or []
+    provided: dict[str, str] = {}
+    by_service: dict[str, list[tuple[str, str]]] = {}
+    for comp in components:
+        for key, service in (comp.get("provides") or {}).items():
+            provided.setdefault(key, comp.get("name") or "")
+            by_service.setdefault(service, []).append((key, comp.get("name") or ""))
+    unmet = []
+    for comp in components:
+        name = comp.get("name") or ""
+        for key, service in (comp.get("requires") or {}).items():
+            if key in provided:
+                continue
+            unmet.append({"component": name, "key": key, "service": service,
+                          "fix": _unmet_fix(name, key, service,
+                                            by_service.get(service) or [])})
+    return unmet
+
+
+def _unmet_fix(component: str, key: str, service: str,
+               providers: list[tuple[str, str]]) -> str:
+    """The remedy for one unmet requirement (issue #2386). Another
+    component's provision of the same service is named first: requiring it
+    under its own key is the likely intent. Dropping the requirement is the
+    fix only when the component itself is the one provider of the service."""
+    others = [(k, by) for k, by in providers if by != component]
+    if others:
+        other_key, by = others[0]
+        return (f"`{service}` is provided by `{by}` under the key `{other_key}`, "
+                f"and a requirement is matched by key: write `requires "
+                f"{other_key}: {service}`")
+    own = [k for k, _by in providers]
+    if own:
+        return (f"`{component}` already provides `{service}` as `{own[0]}`, and "
+                f"a component does not require the service it provides, so drop "
+                f"`requires {key}`")
+    return (f"provide `{key}: {service}` from a component, a host service, a "
+            f"`--providers` model host or a placement remote, or drop "
+            f"`requires {key}` from `{component}`")
+
+
+def unmet_phrase(record: dict) -> str:
+    """One unmet requirement in words, shared by `revl_check`'s note and the
+    swap gate's PENDING refusal so both name the key the same way."""
+    return (f"`{record['component']}` requires `{record['key']}: "
+            f"{record['service']}`, which nothing in the composition provides")
+
+
+def pending_reason(ir: dict, comp: dict, resolved) -> str:
+    """Why the swap health gate found `comp`'s successor fiber PENDING (issue
+    #2386): every requirement of it that does not resolve after the load, each
+    named with its key and service. A key nothing in the composition provides
+    carries the same fix `revl_check` gives; a key that is provided, but whose
+    provider did not come up, says so instead."""
+    name = comp.get("name") or ""
+    static = {r["key"]: r for r in unmet_requirements(ir)
+              if r["component"] == name}
+    parts = []
+    for key, service in (comp.get("requires") or {}).items():
+        if key in static:
+            record = static[key]
+            parts.append(f"{unmet_phrase(record)} (fix: {record['fix']})")
+        elif key not in resolved:
+            parts.append(f"`{name}` requires `{key}: {service}`, whose provider "
+                         f"did not come up")
+    if not parts:
+        return "the successor fiber is PENDING after the swap load"
+    return ("the successor fiber is PENDING after the swap load because of an "
+            "unmet requirement: " + "; ".join(parts))
+
+
+def _unmet_note(unmet: list[dict]) -> str:
+    named = " ".join(f"{unmet_phrase(r)}. Fix: {r['fix']}." for r in unmet)
+    return (f"warning: {named} A host service, a `--providers` model host or "
+            "a placement remote can provide such a key at run time, but this "
+            "MCP session supplies none of them: here the component would stay "
+            "PENDING, and a swap that adds it would be refused")
 
 
 def _failure(record: dict) -> dict:
