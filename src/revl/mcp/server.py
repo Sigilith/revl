@@ -1463,7 +1463,10 @@ _ASKING_KEYS = _SOURCE_KEYS + ("with", "comments")
 def _names_no_source(arguments: dict) -> bool:
     """True when the call names no source of its own: no `files`, `source`,
     `modules` or `proposal`."""
-    return not any(arguments.get(key) for key in _SOURCE_KEYS)
+    # `source` is a source when it is given at all, however empty: `_source_set`
+    # reads `source is not None` the same way (issue #2184)
+    return arguments.get("source") is None and not any(
+        arguments.get(key) for key in _SOURCE_KEYS if key != "source")
 
 
 def _stdlib_only(arguments: dict) -> bool:
@@ -1505,7 +1508,7 @@ def _tool_source(arguments: dict) -> dict:
 
     symbol = arguments.get("symbol")
     if not symbol and _bare_call(arguments):
-        return {"ok": True, **_stdlib.catalogue()}
+        return _stdlib_answer()
     if not symbol:
         return _session_error("`symbol` is required: a declaration name, "
                               "`<buffer>:Name`, or `<buffer>:<line>`")
@@ -1515,7 +1518,15 @@ def _tool_source(arguments: dict) -> dict:
     try:
         vs = _stdlib.working_set() if stdlib else _source_set(arguments)
         reader = _stdlib.read if stdlib else _symbols.read
-        result = reader(vs, symbol, deps=deps, comments=comments)
+        try:
+            result = reader(vs, symbol, deps=deps, comments=comments)
+        except _symbols.NoDeclaration:
+            # a name that is no declaration may be a held buffer (issue #2322);
+            # an AMBIGUOUS name is a declaration, and keeps its own refusal
+            result = None if stdlib else _edit.read_buffer(
+                vs, symbol, modifiers=_declaration_options(arguments))
+            if result is None:
+                raise
     except RevlError as error:
         # a path that cannot be opened is a PATH error, reported by the same
         # `report`/`classify` the check and load verbs use, so `revl_source`
@@ -1531,6 +1542,39 @@ def _tool_source(arguments: dict) -> dict:
         result["knowledge"] = {**_knowledge.ride(entries, [result["symbol"]]),
                                "notes": _notes.concerning(SESSION, [result["symbol"]])}
     return {"ok": True, **result}
+
+
+def _declaration_options(arguments: dict) -> tuple:
+    """The options of a call that only a declaration read can honour."""
+    out = []
+    if arguments.get("with"):
+        out.append("`with: " + json.dumps(list(arguments["with"])) + "`")
+    if arguments.get("comments") is False:
+        out.append("`comments: false`")
+    return tuple(out)
+
+
+def _stdlib_answer() -> dict:
+    """The bare `revl_source {}` answer: the packaged stdlib's index and, when
+    the session holds a composition or a draft, the buffers it holds and what
+    each declares as `held` (issue #2322), so the names a read takes are in
+    the first answer. A stdlib that is not installed is refused rather than
+    answered as an empty one (issue #2184)."""
+    held = None
+    if SESSION.loaded:
+        held = _edit.running_source(SESSION)
+    elif _draft.pending(SESSION) is not None:
+        held = _draft.pending(SESSION)["vs"]
+    catalogue = _stdlib.catalogue()
+    answer = {"ok": True, **catalogue}
+    if held is not None:
+        answer["held"] = _edit.held_buffers(held)
+    elif not catalogue["packaged"]:
+        return _session_error(
+            f"the packaged stdlib is not installed: {catalogue['root']} is "
+            "not a directory. Pass `files` or `source`, or load a composition, "
+            "to read one")
+    return answer
 
 
 def _source_set(arguments: dict) -> dict:
@@ -4415,8 +4459,13 @@ TOOLS = [
                        "(its services, the functions and types it uses), and "
                        "`comments: false` returns the code alone in canonical form. "
                        "Reads the running composition, or, with nothing loaded, "
-                       "`files`/`source`. With nothing loaded and no `symbol` it "
-                       "answers with the PACKAGED STDLIB instead: every "
+                       "`files`/`source`. A `symbol` that is no declaration but "
+                       "names a held buffer (`plain.rvl`, `source`, an "
+                       "in-memory module's key) reads that whole buffer "
+                       "(`kind: \"buffer\"`). With no `symbol` and nothing else "
+                       "asked for it answers with the PACKAGED STDLIB instead "
+                       "(plus `held`, the buffers the session holds and what "
+                       "each declares): every "
                        "`stdlib/*.rvl` module and its symbols, and the base type "
                        "surface (`Str`, `List`, `Map`, ...) as `builtin` — the "
                        "vocabulary, without having to know a name in it first. A "
@@ -4433,8 +4482,10 @@ TOOLS = [
             "properties": {
                 "symbol": {"type": "string",
                            "description": "`Name`, `<buffer>:Name` or "
-                                          "`<buffer>:<line>`; omit, with nothing "
-                                          "loaded, for the packaged stdlib"},
+                                          "`<buffer>:<line>`; a held buffer's "
+                                          "name reads it whole; omit, with "
+                                          "nothing else asked for, for the "
+                                          "packaged stdlib"},
                 "with": {"type": "array", "items": {"type": "string",
                                                     "enum": ["deps", "knowledge"]},
                          "description": "`deps`: also the declarations it names; "
