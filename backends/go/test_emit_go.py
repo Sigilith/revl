@@ -1002,6 +1002,96 @@ def test_extern_go_body_hoists_quoted_import_path():
     assert '""encoding/json""' not in src  # not double-quoted
 
 
+def test_extern_go_body_hoists_aliased_import_and_builds():
+    src = emit.emit(_extern_ir(
+        '//revl:import tm "time"\nreturn tm.Now().String()', returns="Str"),
+        package="p")
+    assert '\ttm "time"' in src
+    assert "//revl:import" not in src
+    _go_build(src, "aliased-import")
+
+
+@pytest.mark.parametrize("line", [
+    '//revl:import tm "time" x',
+    "//revl:import",
+    '//revl:import ""',
+    '//revl:import tm ""',
+    '//revl:import "time',
+    "\t//revl:import\t",
+])
+def test_extern_go_body_refuses_a_malformed_import_directive(line):
+    # kept as a Go comment, the line would compile and drop the import
+    with pytest.raises(emit.EmitError,
+                       match="extern `probe`: malformed `//revl:import`") as err:
+        emit.emit(_extern_ir(f"{line}\nreturn nil"), package="p")
+    assert repr(line.strip()) in str(err.value)
+
+
+def test_extern_go_body_keeps_a_longer_word_as_a_comment():
+    src = emit.emit(_extern_ir("//revl:imported is prose\nreturn nil"),
+                    package="p")
+    assert "\t//revl:imported is prose" in src
+
+
+_GO_KEYWORDS_25 = (
+    "break case chan const continue default defer else fallthrough for func "
+    "go goto if import interface map package range return select struct "
+    "switch type var").split()
+
+
+@pytest.mark.parametrize("alias", _GO_KEYWORDS_25)
+def test_extern_go_body_refuses_a_keyword_import_alias(alias):
+    line = f'//revl:import {alias} "time"'
+    with pytest.raises(emit.EmitError, match=f"Go keyword `{alias}`") as err:
+        emit.emit(_extern_ir(f"{line}\nreturn nil"), package="p")
+    assert repr(line) in str(err.value)
+
+
+_FMT_ALIAS_DOC = """
+extern pure fn shout(s: Str) -> Str = @go {
+	//revl:import fmt "strings"
+	return fmt.ToUpper(s)
+}
+service S { fn f(s: Str) -> Str }
+component C provides s: S { provide s { fn f(s) { return shout(s) } } }
+"""
+
+
+@pytest.mark.parametrize("doc", ["combined", "live"])
+def test_extern_go_body_refuses_an_alias_the_preamble_binds(doc):
+    # `fmt "strings"` beside the preamble's `"fmt"`: go rejects the block
+    from revl import compile_source  # noqa: PLC0415
+    source = _FMT_ALIAS_DOC
+    if doc == "live":
+        source += 'lifecycle test "t" {\n  load C\n  unload C\n  assert no_residue\n}\n'
+    with pytest.raises(emit.EmitError,
+                       match='alias `fmt` is already bound to `"fmt"`') as err:
+        emit.emit(compile_source(source))
+    assert "extern `shout`: '//revl:import fmt \"strings\"'" in str(err.value)
+
+
+def test_extern_go_body_refuses_one_alias_bound_to_two_paths():
+    body = ('//revl:import tm "time"\n//revl:import tm "text/template"\n'
+            "return nil")
+    with pytest.raises(emit.EmitError, match="alias `tm` is already bound"):
+        emit.emit(_extern_ir(body), package="p")
+
+
+def test_extern_go_body_keeps_one_alias_bound_twice_to_one_path():
+    src = emit.emit(_extern_ir(
+        '//revl:import tm "time"\n//revl:import tm "time"\n'
+        "return tm.Now().String()", returns="Str"), package="p")
+    assert src.count('\ttm "time"') == 1
+    _go_build(src, "alias-twice")
+
+
+@pytest.mark.parametrize("alias", ["_", "."])
+def test_extern_go_body_keeps_blank_and_dot_import_aliases(alias):
+    src = emit.emit(_extern_ir(f'//revl:import {alias} "time"\nreturn nil'),
+                    package="p")
+    assert f'\t{alias} "time"' in src
+
+
 def test_revl_any_maps_to_go_any():
     src = emit.emit(_extern_ir("return s", returns="Any"), package="p")
     assert "func probe(s string) any {" in src
