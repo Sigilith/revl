@@ -725,7 +725,8 @@ def test_an_unconfirmed_dispose_is_not_reported_as_a_clean_teardown(tmp_path, on
     spec = tmp_path / "stuck.json"
     spec.write_text(json.dumps({**_SPEC, "probe": [], "once": once}))
     done = subprocess.run([binary, str(spec)], capture_output=True, text=True,
-                          timeout=300, stdin=subprocess.DEVNULL)
+                          timeout=300, stdin=subprocess.DEVNULL,
+                          env={**os.environ, "REVL_TEARDOWN_GRACE": "1"})
     both = done.stdout + done.stderr
     assert "MARK STUCK" in both, both
     assert "dispose NOT confirmed" in both, both
@@ -739,8 +740,8 @@ def test_an_unconfirmed_dispose_is_not_reported_as_a_clean_teardown(tmp_path, on
 def test_the_teardown_bound_follows_revl_teardown_grace(tmp_path):
     """The conductor's stranded-teardown report tells a user to raise
     REVL_TEARDOWN_GRACE, so the runner's own dispose bound reads it (seconds)
-    and keeps 5s only as the default. With a never-settling inverse and a
-    1 second grace the runner gives up well before the 5 second default."""
+    and keeps the conductor's 30s only as the default. With a never-settling inverse
+    and a 1 second grace the runner gives up well before that default."""
     binary = _build(tmp_path, doc=_STUCK_UNDO_DOC)
     spec = tmp_path / "grace.json"
     spec.write_text(json.dumps({**_SPEC, "probe": [], "once": False}))
