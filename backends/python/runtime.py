@@ -77,7 +77,7 @@ _ENTRY_STAMP = itertools.count()
 __all__ = [
     "Clock", "ConfigError", "ConfigSchema", "FaultProbe", "Frame", "Job", "JobCancelled",
     "JobHandle", "LeaseHandle", "LeaseRefused", "Map", "Pool", "PoolError",
-    "EstopHalted", "EstopRefused",
+    "EstopHalted", "EstopRefused", "fail_error",
     "SessionCommitError", "SessionOwner",
     "SpawnHandle", "StateIncompatible",
     "EventContract",
@@ -2992,6 +2992,19 @@ def _live_frames() -> list:
     """A snapshot of the live frames, taken under the halt lock."""
     with _ESTOP_LOCK:
         return list(_LIVE_FRAMES)
+
+
+def fail_error(message) -> RuntimeError:
+    """What a `fail` step raises (issue #2378): a plain RuntimeError, marked.
+
+    The marker is what lets the lifecycle driver tell a `fail` the author wrote
+    from any other RuntimeError an activation can raise (a host stub's refusal,
+    a runtime guard, a host body's own `raise`). The error is an ordinary
+    RuntimeError in every other respect: its type, its traceback line and its
+    pickling are unchanged."""
+    err = RuntimeError(message)
+    err._revl_activation_fail = True
+    return err
 
 
 class EstopRefused(RuntimeError):

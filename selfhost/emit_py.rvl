@@ -3393,7 +3393,7 @@ fn body_step(step: Any, indent: Int, comp_name: Str, counter: Int, services: Any
     return { lines: out, counter: counter }
   }
   if (kind == "fail") {
-    var out = [line(indent, `raise RuntimeError(${cexpr(value_field(step, "message"))})`)]
+    var out = [line(indent, `raise _revl_fail_error(${cexpr(value_field(step, "message"))})`)]
     out = out.push("")
     return { lines: out, counter: counter }
   }
@@ -4437,6 +4437,18 @@ fn lifecycle_harness() -> List[Str] {
     "    return _REVL_LIVE",
     "",
     "",
+    "def _revl_load_failed(fiber, name, where):",
+    "    # issue #2378: a `fail` the activation reached fails the `load`, as it does",
+    "    # on the other tiers. cordis lands the fiber FAILED with the error recorded;",
+    "    # without this read the load settles quietly and the error surfaces only",
+    "    # when a provided key is called. Only the error a `fail` raises counts (it",
+    "    # carries the marker): a host body or a runtime guard that raises on",
+    "    # purpose still loads quietly (issues #1895, #1859).",
+    "    err = getattr(fiber, \"_error\", None)",
+    "    if getattr(err, \"_revl_activation_fail\", False):",
+    "        raise AssertionError(\"{}: load {}: {}\".format(where, name, err)) from err",
+    "",
+    "",
     "async def _revl_call(root, key, method, args, where):",
     "    impl = root.get(key)",
     "    if impl is None:",
@@ -4548,7 +4560,8 @@ fn lifecycle_step(st: Any, indent: Int, where: Str) -> List[Str] {
     var parts = []
     for (k of value_keys(cfg)) { parts = parts.push(`${py_repr(k)}: ${expr(value_field(cfg, k))}`) }
     return [line(indent, `_revl_fibers[${py_repr(comp)}] = _revl_plug(root, ${comp}, {${parts.join(", ")}})`),
-            line(indent, "await _revl_settle()")]
+            line(indent, "await _revl_settle()"),
+            line(indent, `_revl_load_failed(_revl_fibers[${py_repr(comp)}], ${py_repr(comp)}, ${py_repr(where)})`)]
   }
   if (kind == "unload") {
     let comp = mangle(value_str(value_field(st, "component")))
@@ -4769,6 +4782,8 @@ pub fn emit_py_src(source_ir: Any) -> Str {
   if (ir_uses_host_root(ir, "Stream") || uses_kind(value_field(ir, "components"), "subscribe")
       || uses_kind(value_field(ir, "components"), "stream-iter")) { imports = imports.push("Stream") }
   if (need_mark_secret) { imports = imports.push("mark_secret as _revl_mark_secret") }
+  // issue #2378: a `fail` step raises the runtime's marked RuntimeError.
+  if (uses_kind(value_field(ir, "components"), "fail")) { imports = imports.push("fail_error as _revl_fail_error") }
   // §7.1: the lifecycle driver loads components through the realm-aware `plug`,
   // reads the host-builtin trace, may auto-retry an idempotent emission (item
   // 44), and collects inverse residue off the frame. `advance` adds the clock

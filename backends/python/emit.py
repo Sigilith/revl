@@ -94,6 +94,7 @@ _IMPORT_ALIAS = {
     "declare_secret_types": "_revl_declare_secret_types",
     "declared_crossing": "_revl_declared_crossing",
     "site_compensation": "_revl_site_compensation",
+    "fail_error": "_revl_fail_error",
 }
 _RESERVED = _HOST_ROOTS | {"self"}
 
@@ -2220,7 +2221,10 @@ class _ComponentEmitter:
                 out.add(indent, f"{aw}{self._expr(step.get('acquire'), where)}")
                 out.add(indent, f"yield lambda: {self._expr(step.get('undo'), where)}")
         elif kind == "fail":
-            out.add(indent, f"raise RuntimeError({self._expr(step.get('message'), where)})")
+            # issue #2378: the lifecycle driver tells this raise from any other
+            # RuntimeError by its type, so a `fail` fails a bare `load`
+            self.uses.add("fail_error")
+            out.add(indent, f"raise _revl_fail_error({self._expr(step.get('message'), where)})")
         elif kind == "if":
             def arm(nested: dict) -> None:
                 self._body_step(out, indent + 1, nested, where)
@@ -4978,6 +4982,18 @@ def _revl_live():
     return _REVL_LIVE
 
 
+def _revl_load_failed(fiber, name, where):
+    # issue #2378: a `fail` the activation reached fails the `load`, as it does
+    # on the other tiers. cordis lands the fiber FAILED with the error recorded;
+    # without this read the load settles quietly and the error surfaces only
+    # when a provided key is called. Only the error a `fail` raises counts (it
+    # carries the marker): a host body or a runtime guard that raises on
+    # purpose still loads quietly (issues #1895, #1859).
+    err = getattr(fiber, "_error", None)
+    if getattr(err, "_revl_activation_fail", False):
+        raise AssertionError("{}: load {}: {}".format(where, name, err)) from err
+
+
 async def _revl_call(root, key, method, args, where):
     impl = root.get(key)
     if impl is None:
@@ -5095,6 +5111,7 @@ def _lifecycle_step(out: "_Lines", indent: int, step: dict, where: str) -> None:
                            for name, value in (step.get("config") or {}).items())
         out.add(indent, f"_revl_fibers[{component!r}] = _revl_plug(root, {component}, {{{config}}})")
         out.add(indent, "await _revl_settle()")
+        out.add(indent, f"_revl_load_failed(_revl_fibers[{component!r}], {component!r}, {where!r})")
     elif kind == "unload":
         component = _ident(step["component"], "component name")
         out.add(indent, f"_revl_fiber = _revl_fibers.pop({component!r})")
