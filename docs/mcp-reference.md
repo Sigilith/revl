@@ -963,7 +963,13 @@ calls for one change, five of them `revl_check` polls):
    `files`/`source`/`modules`, so it matches what `revl_load` then the same
    withdrawal would plan (issue #2225): `cascade: true` withdraws the whole
    cascade, and a withdrawal that would strand a dependent is refused before
-   anything is loaded, with `loaded: false` and the same plan and hint;
+   anything is loaded, with `loaded: false` and the same plan and hint. The
+   refusal also carries `next` (issue #2536): the same `revl_change` call with
+   `cascade: true`, `ready` and pre-filled from the arguments it refused (the
+   carried `files`/`source`/`modules`). It never carries `commit`, even when the
+   refused call did: the cascade withdraws more than the caller named, so sent
+   as-is it answers with the plan of the cascade (`committed: false`), and
+   committing that is a separate call the caller chooses;
 3. **apply** the change to a working copy of the server-side source, so
    nothing about the running composition has changed yet;
 4. **verify**: admission against the running composition, the lease and
