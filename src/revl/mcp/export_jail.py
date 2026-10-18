@@ -24,14 +24,18 @@ flag, and `revl_export` is reached only over the transport.
   `<root>/.revl/export/manifest.json` (path and SHA-256 of the exact bytes
   written); no other manifest is read. A missing, unreadable or malformed
   manifest records nothing, so it refuses the overwrite: it fails closed. A
-  manifest is never an export target, under any spelling.
+  manifest, and the digest record beside it (`digests.json`, issue #2577),
+  is never an export target, nor a directory any target lies under, under
+  any spelling.
 * TRUST: a file inside any `.revl/export/` directory is the agent's, by path,
   always. Named in `files` or reached by `use`, its text compiles under the
   authoring profile with no operator text to diff against, exactly as if it
-  had been sent inline. The manifest never decides who wrote a file. Every
-  other compile applies the same rule to a file on disk there, and every
-  `revl` command does unless it is given `--trust-exported` (`CliRule`, issue
-  #2547).
+  had been sent inline. Neither the manifest nor the digest record ever
+  decides how a file compiles. Every other compile applies the same rule to
+  a file on disk there, and every `revl` command does unless it is given
+  `--trust-exported` (`CliRule`, issue #2547). The two only ever lower a
+  trust: a file elsewhere whose text they record is an adopted copy, whose
+  changed note blocks stay the author's (`exported_as`, issue #2577).
 
 An export also writes only `.rvl` modules (an inline one, only those the
 program reaches by `use`), a destination may not be a symbolic link, and a
@@ -52,6 +56,8 @@ import os
 # the path rule lives outside `revl.mcp`, so compiling never imports the
 # server (issue #1780); the jail and the compiler ask the same functions
 from ..export_area import EXPORT_DIR, in_export_area
+# the export directory's parts below a root, as `_names_a_record` matches them
+from ..export_area import _EXPORT_PARTS
 # re-exported: the server and its callers name them through this module
 from ..export_area import CliRule  # noqa: F401
 from ..export_area import cli_rule  # noqa: F401
@@ -66,6 +72,9 @@ from ..export_area import under_export_dir as _under_export_dir
 from .notes import is_record_path
 
 MANIFEST = "manifest.json"
+# every other digest an export wrote: the ones a later export replaced in the
+# manifest, and the loaded text's of a copy with carriage returns (issue #2577)
+DIGESTS = "digests.json"
 
 # the files the server opened as operator configuration: (st_dev, st_ino) of
 # those that exist, and the case-folded realpath of every one
@@ -249,6 +258,120 @@ def revl_wrote(path: str, roots) -> bool:
                for key, sha in _manifest_entries(_manifest_of(root)).items())
 
 
+def _as_loaded(text: str) -> str:
+    """`text` as a load reads it back: a load opens a file with universal
+    newlines (`edit._read_disk`), so `\\r\\n` and a lone `\\r` read as `\\n`."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _digests_of(root: str) -> str:
+    return os.path.join(root, EXPORT_DIR, DIGESTS)
+
+
+def _recorded_digests(record: str) -> dict:
+    """`{sha256: relpath}` from a digest record, or nothing at all when it is
+    missing or damaged (`_parsed_record`)."""
+    return _parsed_record(record) or {}
+
+
+def _parsed_record(record: str) -> dict | None:
+    """`{sha256: relpath}` from the digest record at `record`: empty when
+    nothing is there, None when it is damaged, that is anything but a
+    readable file holding exactly `{"digests": {str: str}}`. A damaged record
+    is ignored, never fatal, and reported (`damaged_records`); the next
+    export that adds to it starts it again."""
+    if not os.path.lexists(record):
+        return {}
+    text = _read_exact(record)
+    if text is None:
+        return None
+    try:
+        document = json.loads(text)
+    except (ValueError, RecursionError):
+        return None
+    digests = document.get("digests") if isinstance(document, dict) else None
+    if not isinstance(digests, dict) or set(document) != {"digests"}:
+        return None
+    if not all(isinstance(sha, str) and isinstance(key, str)
+               for sha, key in digests.items()):
+        return None
+    return dict(digests)
+
+
+def damaged_records(roots) -> list[str]:
+    """The digest record of each of `roots` that is there but damaged
+    (`_parsed_record`), as a load and an export report it: what it held no
+    longer matches an adopted copy."""
+    return [record for record in (_digests_of(root) for root in roots)
+            if _parsed_record(record) is None]
+
+
+def exported_as(text: str, roots) -> str | None:
+    """The export copy, relative to its root, that an export under one of
+    `roots` wrote with `text` as a load reads it, or None (issue #2577). A
+    file outside the export directory holding such text is an adopted copy of
+    that export, wherever it lies.
+
+    A root's manifest holds the digest of the bytes each copy holds now,
+    which is the digest of the text a load reads when the copy has no
+    carriage return. Its digest record (`digest_writes`) holds every other
+    digest an export wrote: the one a later export of the same copy replaced
+    in the manifest, and the loaded text's of a copy with `\\r` in it. So a
+    copy adopted byte for byte, or with only its line ends converted, keeps
+    matching after the export is written again. Neither file ever decides how
+    a file compiles."""
+    digest = _sha256(_as_loaded(text))
+    for root in roots:
+        for key, sha in sorted(_manifest_entries(_manifest_of(root)).items()):
+            if sha == digest:
+                return key
+        found = _recorded_digests(_digests_of(root)).get(digest)
+        if found is not None:
+            return found
+    return None
+
+
+def digest_writes(targets, roots) -> list[tuple[str, str]]:
+    """The digest records to write with `targets`, as `(path, text)` (issue
+    #2577). Computed and written before any of `targets` and before the
+    manifests, since it reads the digests they are about to replace.
+
+    Append-only: for each target, the digest its root's manifest held for
+    that path, when this write replaces it with another, and, when the text
+    holds a carriage return, the digest of the text as a load reads it. An
+    entry is never removed or changed, and a record is written only when it
+    gains one, so an export that replaces nothing and writes no `\\r` writes
+    none. The record is `<root>/.revl/export/digests.json`, written by
+    `revl_export` only, like the manifest: no export target can name it,
+    since `check_write_back` and `check_inline` refuse anything that is not
+    a `.rvl` module and `check_not_manifest` refuses it by name, and as a
+    directory any target lies under (`_names_a_record`)."""
+    records: dict[str, dict] = {}
+    grown: set[str] = set()
+    for path, text in targets:
+        root = _root_of(path, roots)
+        if root is None:
+            continue
+        key = _rel_in_root(path, root)
+        record = _digests_of(root)
+        if record not in records:
+            records[record] = _recorded_digests(record)
+        entries = records[record]
+        replaced = _manifest_entries(_manifest_of(root)).get(key)
+        added = []
+        if replaced is not None and replaced != _sha256(text):
+            added.append(replaced)
+        if "\r" in text:
+            added.append(_sha256(_as_loaded(text)))
+        for sha in added:
+            if sha not in entries:
+                entries[sha] = key
+                grown.add(record)
+    return [(record, json.dumps({"digests": records[record]}, indent=2,
+                                sort_keys=True) + "\n")
+            for record in sorted(grown)]
+
+
 def manifest_writes(targets, roots) -> list[tuple[str, str]]:
     """The manifest files to write with `targets`, as `(path, text)`: each
     target recorded by the SHA-256 of the exact text written, under the
@@ -381,21 +504,40 @@ def _is_latch(path: str, latches) -> bool:
 
 
 def _is_manifest(path: str, roots) -> bool:
-    """Whether `path` names an export manifest: any `manifest.json` inside an
-    export directory, under any spelling, or a link to a root's manifest."""
-    named = any(_fold(os.path.basename(p)) == MANIFEST and in_export_area(p)
+    """Whether `path` names an export manifest or a digest record: any
+    `manifest.json` or `digests.json` inside an export directory, or any
+    path under a directory of either name there (`_names_a_record`), under
+    any spelling, or a link to a root's own."""
+    named = any((_fold(os.path.basename(p)) in (MANIFEST, DIGESTS)
+                 and in_export_area(p)) or _names_a_record(p)
                 for p in (os.path.abspath(path), _real(path)))
-    return named or any(_same_file(path, _manifest_of(root)) for root in roots)
+    return named or any(_same_file(path, _manifest_of(root))
+                        or _same_file(path, _digests_of(root)) for root in roots)
+
+
+def _names_a_record(path: str) -> bool:
+    """Whether the spelling `path` has `manifest.json` or `digests.json` as
+    any part after a `.revl/export` directory, compared case-folded (issue
+    #2577). A write there would make the name a directory, and every later
+    write of the record by that name would fail. Reads nothing from the
+    disk."""
+    parts = [_fold(part) for part in path.split(os.sep)]
+    width = len(_EXPORT_PARTS)
+    return any(tuple(parts[i:i + width]) == _EXPORT_PARTS
+               and any(part in (MANIFEST, DIGESTS) for part in parts[i + width:])
+               for i in range(len(parts) - width + 1))
 
 
 def check_not_manifest(paths, roots) -> None:
-    """Refuse any destination that is an export manifest: only `revl_export`
-    itself records what it wrote, never an author's text."""
+    """Refuse any destination that is an export manifest or a digest record:
+    only `revl_export` itself records what it wrote, never an author's
+    text."""
     hit = [p for p in paths if _is_manifest(p, roots)]
     if hit:
         raise ExportRefused(
-            f"refused: {', '.join(hit)} is the export manifest, which only "
-            "revl_export writes; nothing was written")
+            f"refused: {', '.join(hit)} is, or lies under the name of, the "
+            "export manifest or its digest record, which only revl_export "
+            "writes; nothing was written")
 
 
 def check_operator_files(paths, latches=()) -> None:
