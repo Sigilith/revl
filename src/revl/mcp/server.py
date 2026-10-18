@@ -1563,14 +1563,20 @@ def _exported_candidate(files: list[str] | None,
     text (#2524), and its report carries the reached ones as dependencies.
     Whether a file counts is decided by its path, as the compile decided it;
     a named file is read back only for the refusal's line, so one that no
-    longer reads still counts, with no text."""
+    longer reads still counts, with no text.
+
+    With an export-area part, the whole program is compared, so the texts
+    also carry the operator files the same compile read from disk (its
+    `disk_reads`, keyed by abspath like the rest), beneath the export-area
+    ones: a refusal of a component in an operator file names its line."""
     named = [p for p in files or () if _export_jail.in_export_area(p)]
     reached = {p: t for p, t in
                (compile_report.get("dependencies") or {}).items()
                if _export_jail.in_export_area(p)}
     if not named and not reached:
         return None
-    texts = {**_export_jail.exported_texts(named), **reached}
+    texts = {**(compile_report.get("disk_reads") or {}),
+             **_export_jail.exported_texts(named), **reached}
     return {p: t for p, t in texts.items() if isinstance(t, str)}
 
 

@@ -15,7 +15,7 @@ A swap of operator files is exempt only while it carries no export-area text.
 An operator file outside the export area that reaches an export-area module by
 `use` compiles under the profile too, so the whole program is compared and the
 same clause left out of the operator file is refused. Components are never
-imported, so the refusal names the operator file, where the component is.
+imported, so the refusal names the line in the operator file that holds it.
 
 Controls: the same file placed by the operator outside the export area swaps
 in under a trusted author and under the untrusted one when nothing it reaches
@@ -129,6 +129,8 @@ def test_untrusted_swap_of_an_operator_file_reaching_exported_text_is_refused(
     assert refusal["message"] == REMOVED, refusal
     assert refusal.get("code") == "G9", refusal
     assert refusal.get("file") == os.path.relpath(placed), refusal
+    assert refusal.get("line") == _line_of(
+        placed.read_text(encoding="utf-8"), APP_HEADER), refusal
     assert _realms("TenantAApp") == {"kv": "tenant_a"}
     assert "SharedStore" not in _running()
 
