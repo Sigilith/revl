@@ -1513,7 +1513,10 @@ def _swap_inline(arguments: dict, stored: dict, replacing: tuple, before) -> dic
     authored = _authored_host_bodies(full, source, modules)
     running = SESSION.ir
     # issue #2487: carried text may not move a surviving provider out of its
-    # realm by leaving its clause out; jailed `files` alone are the operator's.
+    # realm by leaving its clause out. Of jailed `files`, only operator files
+    # outside the export area are exempt (issue #2600): a file inside it,
+    # named in `files` or reached by `use`, compiled under the profile as the
+    # agent's text (#2524), so it is compared like inline source.
     # issue #2587: compared are the running generation and `full`, the
     # candidate compiled as a complete composition. `full` is the whole
     # program `SESSION.swap` installs below, with nothing of the running one
@@ -1522,10 +1525,12 @@ def _swap_inline(arguments: dict, stored: dict, replacing: tuple, before) -> dic
     # this swap and takes its placements with it; one it carries is compared
     # per key for what it provides (#2523) and per name for what it requires
     # (#2585).
-    if source is not None or modules:
+    exported = _exported_candidate(files, compile_report)
+    if source is not None or modules or exported is not None:
         refused = _realm_removal_refused(
             running, full,
-            _edit._candidate_texts({"source": source, "modules": modules}))
+            {**(exported or {}),
+             **_edit._candidate_texts({"source": source, "modules": modules})})
         if refused is not None:
             return refused
     # issue #1704: the same preflight revl_edit carries, read off the
@@ -1546,6 +1551,26 @@ def _swap_inline(arguments: dict, stored: dict, replacing: tuple, before) -> dic
                           "blastRadius": radius, **_summary(full), **state,
                           **_effect_classes.report(full, running, against=True)},
                          before)
+
+
+def _exported_candidate(files: list[str] | None,
+                        compile_report: dict) -> dict | None:
+    """The export-area part of a `files` candidate (issue #2600), or `None`
+    when it has none: `{abspath: text}` of each file `files` names inside an
+    export directory and of each module there the compile reached by `use`.
+    `compile_under_authoring` compiled both under the profile as the agent's
+    text (#2524), and its report carries the reached ones as dependencies.
+    Whether a file counts is decided by its path, as the compile decided it;
+    a named file is read back only for the refusal's line, so one that no
+    longer reads still counts, with no text."""
+    named = [p for p in files or () if _export_jail.in_export_area(p)]
+    reached = {p: t for p, t in
+               (compile_report.get("dependencies") or {}).items()
+               if _export_jail.in_export_area(p)}
+    if not named and not reached:
+        return None
+    texts = {**_export_jail.exported_texts(named), **reached}
+    return {p: t for p, t in texts.items() if isinstance(t, str)}
 
 
 def _with_touched(result: dict, before: dict) -> dict:
