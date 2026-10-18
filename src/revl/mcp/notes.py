@@ -24,8 +24,11 @@ notes an agent (or a human, through an export) adds on top:
   changes goes `stale`; `confirm` re-fingerprints it;
 * the ROUND TRIP: an export renders each live note as a marked comment block
   above its anchor (`// note k_<id>:`, the body, then `// [k_<id>]`), and a
-  load reads marked blocks back. A body that differs from the record becomes a supersede by
-  `author: human`; a marked block with no record becomes a human note.
+  load reads marked blocks back. A body that differs from the record becomes a
+  supersede, and a marked block with no record a new note, authored by whoever
+  wrote the file (issue #2550): an untrusted agent for a file under
+  `.revl/export/`, an untrusted vendor for a vendored truc's component, a
+  human at operator trust for any other file.
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ import os
 import re
 
 from .. import knowledge as _k
+from .. import export_area as _export_area
 
 KINDS = ("rationale", "invariant", "trap", "alternative-rejected", "purpose", "doc")
 EVIDENCE_KINDS = ("diagnostic", "query", "audit", "test", "issue")
@@ -438,11 +442,43 @@ def sidecar_writes(session, vs: dict,
 
 def vendored_path(path: str) -> tuple[str, str, str] | None:
     """(truc name, path, project dir) when `path` is a vendored truc's
-    `trucs/<name>/component.rvl`, else `None` (issue #1769)."""
-    parts = os.path.normpath(os.path.abspath(path)).split(os.sep)
-    if len(parts) >= 3 and parts[-1] == "component.rvl" and parts[-3] == "trucs":
-        return (parts[-2], path, os.sep.join(parts[:-3]) or os.sep)
+    `trucs/<name>/component.rvl`, else `None` (issue #1769).
+
+    Decided the way `export_area.in_export_area` decides an export (issue
+    #2550): on the path as named (absolute, `..` folded away) and as it
+    resolves through symbolic links, its parts compared case-folded. On a
+    case-folding filesystem `TRUCS/<name>/Component.rvl` IS the vendored
+    file, and a link to one holds the publisher's bytes, so either spelling
+    makes it vendored. The name and project dir come from the spelling that
+    matched. Counting a file as vendored never raises a trust: a record it
+    brings earns `publisher` only by the lock's measured signature over those
+    exact records and the lock's pin of the exact bytes loaded."""
+    parts = _vendored_parts(path)
+    if parts is None:
+        return None
+    return (parts[-2], path, os.sep.join(parts[:-3]) or os.sep)
+
+
+def _vendored_parts(path: str) -> list[str] | None:
+    """The parts of the first spelling of `path` (as named, then as it
+    resolves) that is a `trucs/<name>/component.rvl`, compared case-folded,
+    or `None`."""
+    fold = _export_area.fold
+    for spelling in (os.path.normpath(os.path.abspath(path)),
+                     _export_area.real(path)):
+        parts = spelling.split(os.sep)
+        if len(parts) >= 3 and fold(parts[-1]) == "component.rvl" \
+                and fold(parts[-3]) == "trucs":
+            return parts
     return None
+
+
+def _vendored_dir(path: str) -> str:
+    """The directory of the vendored component `path` reaches, from the
+    spelling that matched: for a link, the component's own directory, never
+    the link's, so the records read are the ones shipped beside it."""
+    parts = _vendored_parts(path)
+    return os.sep.join(parts[:-1]) if parts is not None else os.path.dirname(path)
 
 
 def vendored_trucs(vs: dict) -> list[tuple[str, str, str]]:
@@ -509,7 +545,7 @@ def load_vendored(session, vs: dict) -> int:
 
     count = 0
     for name, path, project in vendored_trucs(vs):
-        doc = registry.load_knowledge(os.path.dirname(path), regular_only=True)
+        doc = registry.load_knowledge(_vendored_dir(path), regular_only=True)
         if doc is None:
             continue
         row = _lock_row(project, name)
@@ -578,9 +614,56 @@ def render(text: str, name: str, file_notes: list[dict]) -> str:
     return "\n".join(out)
 
 
+def _import_author(path: str) -> dict:
+    """Who a changed or unrecorded marked block in the loaded file `path` is
+    attributed to (issue #2550): the writer of the file, never the operator
+    by default.
+
+    A file inside any `.revl/export/` directory is the author's by its path
+    alone, the same rule that compiles it under the authoring profile
+    (`export_area.in_export_area`, issues #2524 and #2547): `revl_export`
+    writes there and nowhere else. Its manifest records the bytes an export
+    wrote, not the trust of the session that wrote them, so a block there is
+    an untrusted agent's, whatever trust the loading session has, and rides
+    as an untrusted add does (its body withheld until it carries evidence).
+
+    A vendored truc's `trucs/<name>/component.rvl` holds the publisher's bytes
+    as `truc add` wrote them, so a block there is the publisher's, and
+    untrusted. That is the floor `load_vendored` gives the publisher's own
+    records: they earn `publisher` only from a signature measured over the
+    records themselves, and no signature covers a comment block (nor does an
+    export ever render one into a vendored component).
+
+    Any other file holds whatever bytes were on disk when the load read them,
+    and no MCP verb wrote them there, so its block is attributed to the
+    operator who keeps that disk: a human note at operator trust, as before.
+    That makes adoption a promotion: copying an export out turns each of its
+    changed or unrecorded blocks into an operator note (a changed body into
+    an operator supersede), while an unchanged block keeps its record and that
+    record's trust."""
+    if _export_area.in_export_area(path):
+        return {"kind": "agent", "trust": "untrusted"}
+    if vendored_path(path) is not None:
+        return {"kind": "vendor", "trust": "untrusted"}
+    return {"kind": "human", "trust": "operator"}
+
+
+def _mark_vendored(session, record: dict, path: str) -> dict:
+    """`record`, marked `vendored` with the truc's name when `path` is a
+    vendored component, as `load_vendored` marks the publisher's own records:
+    a vendor's note never lands in the project's sidecar (`sidecar_writes`)."""
+    found = vendored_path(path)
+    if found is None:
+        return record
+    record = {**record, "vendored": found[0]}
+    _records(session)[record["id"]] = record
+    return record
+
+
 def import_marked(session, vs: dict) -> list[dict]:
-    """Read the marked blocks of the loaded files back. A body a human changed
-    supersedes its note (author human); a block with no record becomes one."""
+    """Read the marked blocks of the loaded files back. A changed body
+    supersedes its note and a block with no record becomes one, authored by
+    whoever wrote the file (`_import_author`)."""
     current = notes(session)
     created = []
     for name, text in ((p, (vs.get("files_content") or {}).get(p))
@@ -601,14 +684,14 @@ def import_marked(session, vs: dict) -> list[dict]:
             symbol = _k.anchor_of(text, name, block, decls, nodes, program)[0]
             if symbol is None:
                 continue
-            human = {"kind": "human", "trust": "operator"}
             kind = existing["kind"] if existing is not None else "doc"
             try:
-                created.append(add(session, vs, {"kind": kind, "body": body},
-                                   symbol, author=human,
-                                   supersedes=note_id if existing else None))
+                record = add(session, vs, {"kind": kind, "body": body},
+                             symbol, author=_import_author(name),
+                             supersedes=note_id if existing else None)
             except NoteError:
                 continue
+            created.append(_mark_vendored(session, record, name))
     return created
 
 

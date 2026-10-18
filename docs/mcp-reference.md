@@ -1242,8 +1242,27 @@ into its file as a marked comment directly above its anchor:
 
 Loading that file reads it back: an unchanged block is the same note, so an
 export of the reloaded composition writes nothing (the round trip is byte
-stable); a body a human edited becomes a supersede by `author: {kind: human,
-trust: operator}`; a marked block with no record becomes a human note.
+stable); a changed body becomes a supersede, and a marked block with no record
+a new note.
+
+**Who wrote a reloaded block** (issue #2550). A changed or new block takes the
+trust of whoever wrote the file, never the operator's by default. A file under
+`.revl/export/` is the author's by its path, the same rule that compiles it
+under the authoring profile, so its blocks import as `author: {kind: agent,
+trust: untrusted}` whatever trust the loading session has, and ride exactly as
+an untrusted add does: the body is withheld until the note carries evidence,
+and a sidecar export writes the record with that label. A vendored truc's
+`trucs/<name>/component.rvl` holds the publisher's bytes, whatever name
+reaches it (a case alias, a link), so its blocks import as `author: {kind:
+vendor, trust: untrusted}`, the floor the vendored records get when no
+signature covers them, and are marked `vendored`, so an export never writes
+them to the project's sidecar. Any other file holds bytes no MCP verb
+wrote, so its blocks import as `author: {kind: human, trust: operator}`. An
+unchanged block is never re-attributed: it keeps its record and that record's
+trust. So adoption, copying an export out of `.revl/export/`, is the one step
+that promotes: each changed or unrecorded block in the adopted file becomes an
+operator note, and a changed body an operator supersede. Review an export's
+note blocks before adopting it.
 
 - Inputs: `op` (required); `symbol`, `id`, `kind`, `body`, `evidence`,
   `reason` per op.
