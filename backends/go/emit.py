@@ -4814,6 +4814,43 @@ def _component_has_config(name, components):
     return False
 
 
+def _emit_lifecycle_leftover_dispose(out) -> None:
+    """Dispose, LIFO, every fiber a lifecycle test loaded and did not unload
+    (issue #2505).
+
+    The host resource counter and the clock's timers are package-global, so a
+    test that stops before its `unload` steps (a failed `assert`, a failed
+    load, a panic recovered since #2481) left its timers and host objects
+    counted, and the next test's `assert no_residue` failed on them. py's
+    driver disposes what is left in its `finally`
+    (backends/python/emit.py `_emit_lifecycle_test`); this is that `finally`.
+
+    It is deferred before the #2481 recover, so it runs after it: the panic is
+    already a test failure when teardown starts. Each dispose recovers its own
+    panic, as py's `except Exception: pass` does, so a failing teardown
+    cannot take the binary down. A fiber that failed to load ends `Failed`,
+    not `Gone`, so the wait stops at either.
+    """
+    out.append("\t_revlLoadOrder := []string{}")
+    out.append("\tdefer func() {")
+    out.append("\t\tfor _i := len(_revlLoadOrder) - 1; _i >= 0; _i-- {")
+    out.append("\t\t\t_f, _ok := _fibers[_revlLoadOrder[_i]]")
+    out.append("\t\t\tif !_ok {")
+    out.append("\t\t\t\tcontinue")
+    out.append("\t\t\t}")
+    out.append("\t\t\tdelete(_fibers, _revlLoadOrder[_i])")
+    out.append("\t\t\tfunc() {")
+    out.append("\t\t\t\tdefer func() { _ = recover() }()")
+    out.append("\t\t\t\t_f.Dispose()")
+    out.append("\t\t\t\tfor _j := 0; _j < 200 && _f.State() != stc.StateGone && "
+               "_f.State() != stc.StateFailed; _j++ {")
+    out.append("\t\t\t\t\ttime.Sleep(5 * time.Millisecond)")
+    out.append("\t\t\t\t}")
+    out.append("\t\t\t}()")
+    out.append("\t\t}")
+    out.append("\t}()")
+
+
 def _emit_stc_lifecycle_tests(ir, out) -> None:
     """`lifecycle test` blocks (syntax-2.0 §7.1) as `func TestXxx(t *testing.T)`
     driving the live stc-go runtime (FR-5).
@@ -4869,6 +4906,7 @@ def _emit_stc_lifecycle_tests(ir, out) -> None:
         out.append("func %s(revlT *testing.T) {" % tname)
         out.append("\troot := stc.New()")
         out.append("\t_fibers := map[string]*stc.Fiber{}")
+        _emit_lifecycle_leftover_dispose(out)
         # issue #2481: a provide method a driver step calls, or a timer body
         # an `advance` fires, runs on THIS goroutine and outside any `Apply`,
         # so its panic killed the test binary and every later test with it.
@@ -4918,11 +4956,15 @@ def _emit_stc_lifecycle_tests(ir, out) -> None:
                 else:
                     sig = "Load%s(root)" % cname
                 out.append("\t\t_f := %s" % sig)
+                # issue #2505: tracked before `Ready`, as py records the plug
+                # before `_revl_load_failed`, so a failed load is disposed too.
+                out.append("\t\t_fibers[%s] = _f" % _go_string(component))
+                out.append("\t\t_revlLoadOrder = append(_revlLoadOrder, %s)"
+                           % _go_string(component))
                 out.append("\t\tif err := _f.Ready(stdctx.Background()); err != nil {")
                 out.append('\t\t\trevlT.Fatalf("%%s: %%v", %s, err)'
                            % _go_string(where + ": load " + component))
                 out.append("\t\t}")
-                out.append("\t\t_fibers[%s] = _f" % _go_string(component))
                 out.append("\t}")
             elif kind == "unload":
                 component = step["component"]
@@ -12979,9 +13021,11 @@ _TIME_USE = re.compile(r"\btime\.")
 
 def _drop_unused_time_import(module: str) -> str:
     """Remove the `"time"` import from a module that never uses it (issue
-    #1559). A `lifecycle test` imports `time` for the unload waits
-    (`time.Sleep`), but one with no `unload` step emits none, and go refuses
-    to build a package with an unused import. Deciding on the finished text
+    #1559). A `lifecycle test` imports `time` for its waits (`time.Sleep`).
+    Before issue #2505 one with no `unload` step emitted none; every lifecycle
+    test now waits in its leftover dispose, so it always uses `time`, but other
+    writers still may not, and go refuses to build a package with an unused
+    import. Deciding on the finished text
     covers every writer of `time.` at once (a lifecycle wait, the teardown
     preamble's budgets, the timer preamble). The match is conservative: any
     `time.` token keeps the import, so the worst case is the old behavior."""
