@@ -1513,10 +1513,11 @@ def _swap_inline(arguments: dict, stored: dict, replacing: tuple, before) -> dic
     authored = _authored_host_bodies(full, source, modules)
     running = SESSION.ir
     # issue #2487: carried text may not move a surviving provider out of its
-    # realm by leaving its clause out. Of jailed `files`, only operator files
-    # outside the export area are exempt (issue #2600): a file inside it,
-    # named in `files` or reached by `use`, compiled under the profile as the
-    # agent's text (#2524), so it is compared like inline source.
+    # realm by leaving its clause out. A swap of jailed `files` is exempt
+    # only when it carries no export-area text (issue #2600): a file inside
+    # the export area, named in `files` or reached by `use`, compiled under
+    # the profile as the agent's text (#2524), so the whole program is
+    # compared, operator files included, as for inline source.
     # issue #2587: compared are the running generation and `full`, the
     # candidate compiled as a complete composition. `full` is the whole
     # program `SESSION.swap` installs below, with nothing of the running one

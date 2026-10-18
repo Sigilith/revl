@@ -10,9 +10,17 @@ export-area file in `files`, and nothing else.
 The candidate keeps every running component, adds a shared-realm provider of
 `kv`, and leaves out TenantAApp's clause: refused by name, the refusal
 pointing at the exported file, and the running composition untouched.
+
+A swap of operator files is exempt only while it carries no export-area text.
+An operator file outside the export area that reaches an export-area module by
+`use` compiles under the profile too, so the whole program is compared and the
+same clause left out of the operator file is refused. Components are never
+imported, so the refusal names the operator file, where the component is.
+
 Controls: the same file placed by the operator outside the export area swaps
-in under a trusted author, and an export-area file that keeps the clause
-swaps in under the untrusted one.
+in under a trusted author and under the untrusted one when nothing it reaches
+is in the export area, and an export-area file that keeps the clause swaps in
+under the untrusted author.
 """
 
 import os
@@ -94,4 +102,44 @@ def test_untrusted_swap_of_an_exported_file_keeping_the_clause_is_admitted(
     assert swapped.get("swapped") is True, swapped
     assert _realms("TenantAApp") == {"kv": "tenant_a"}
     assert _realms("TenantAStore") == {"kv": "tenant_a"}
+    assert "SharedStore" in _running()
+
+
+def _operator_using_exported_service(base: Path) -> Path:
+    """The candidate without TenantAApp's clause as an operator file outside
+    the export area, its `Kv` service moved to an export-area module it
+    reaches by `use`."""
+    text = _candidate(keep_app_clause=False)
+    service = text[text.index("service Kv"):text.index("component TenantAStore")]
+    _write(base / ".revl" / "export" / "kv.rvl", service)
+    return _write(base / "candidate.rvl",
+                  'use ".revl/export/kv.rvl" { Kv }\n' + text.replace(service, ""))
+
+
+def test_untrusted_swap_of_an_operator_file_reaching_exported_text_is_refused(
+        loaded):  # noqa: F811
+    assert server_mod.AUTHORING.profile() is not None
+    placed = _operator_using_exported_service(loaded.parent)
+    swapped = _swap_files(placed)
+    assert swapped["ok"] is False, swapped
+    assert swapped.get("admitted") is False, swapped
+    assert swapped.get("swapped") is False, swapped
+    assert REFUSAL in _messages(swapped), swapped
+    refusal = next(d for d in swapped["diagnostics"] if REFUSAL in d["message"])
+    assert refusal["message"] == REMOVED, refusal
+    assert refusal.get("code") == "G9", refusal
+    assert refusal.get("file") == os.path.relpath(placed), refusal
+    assert _realms("TenantAApp") == {"kv": "tenant_a"}
+    assert "SharedStore" not in _running()
+
+
+def test_untrusted_swap_of_an_operator_file_with_no_exported_text_is_admitted(
+        loaded):  # noqa: F811
+    assert server_mod.AUTHORING.profile() is not None
+    placed = _write(loaded.parent / "candidate.rvl",
+                    _candidate(keep_app_clause=False))
+    swapped = _swap_files(placed)
+    assert swapped["ok"] is True, swapped
+    assert swapped.get("swapped") is True, swapped
+    assert _realms("TenantAApp") == {}
     assert "SharedStore" in _running()
