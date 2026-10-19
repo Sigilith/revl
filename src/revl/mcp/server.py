@@ -877,11 +877,21 @@ def _compile(source: str | None, files: list[str] | None,
 
 
 def _authored_host_bodies(ir: dict, source: str | None,
-                          modules: dict | None) -> list:
+                          modules: dict | None, *,
+                          export_area: bool = False) -> list:
     """The agent-authored host bodies `ir` carries: empty unless the candidate
-    came over the transport under an open authoring trust."""
-    over_the_transport = source is not None or bool(modules)
-    return (_host_bodies(ir) if over_the_transport and AUTHORING.host_code
+    is the author's text under an open authoring trust.
+
+    `export_area` says the candidate carries a file inside an export directory.
+    Such a file is the author's by its path and always has been: `revl_export`
+    writes source only under `<root>/.revl/export/`, and `export_area.py` reads
+    that as authorship without consulting the trust at all. So this is not a
+    question about a profile, unlike the realm-removal check, which needs one to
+    have been applied to have something to compare against. Issue #2628: a swap
+    sent only as such a file reported no unreviewed host code, so the operator
+    approved a crossing without being told what the composition carried."""
+    authored = source is not None or bool(modules) or export_area
+    return (_host_bodies(ir) if authored and AUTHORING.host_code
             else [])
 
 
@@ -1510,7 +1520,14 @@ def _swap_inline(arguments: dict, stored: dict, replacing: tuple, before) -> dic
     # issue #1779: and what this compile READ rides with it, so the swapped-in
     # generation anchors records to the files it actually compiled
     origin = _origin(stored, _dependency_buffers(compile_report))
-    authored = _authored_host_bodies(full, source, modules)
+    # issue #2628: read once, asked two different questions below. The ticket
+    # asks whether the author wrote this text, which for a file inside an
+    # export directory is yes by its path. The realm check asks whether a
+    # profile was applied, which needs the gate further down. Sharing the call
+    # keeps the two answers about the same files.
+    export_texts = _exported_candidate(files, compile_report)
+    authored = _authored_host_bodies(full, source, modules,
+                                     export_area=export_texts is not None)
     running = SESSION.ir
     # issue #2487: carried text may not move a surviving provider out of its
     # realm by leaving its clause out. A swap of jailed `files` is exempt
@@ -1531,7 +1548,7 @@ def _swap_inline(arguments: dict, stored: dict, replacing: tuple, before) -> dic
     # export-area file compiles exactly as it did before #2524, it stays the
     # operator's own, and a swap of it keeps the #2487 exemption. Deciding by
     # path alone would refuse that operator a swap this door admitted before.
-    exported = (_exported_candidate(files, compile_report)
+    exported = (export_texts
                 if AUTHORING.profile() is not None else None)
     if source is not None or modules or exported is not None:
         refused = _realm_removal_refused(

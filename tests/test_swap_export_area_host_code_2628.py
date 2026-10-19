@@ -1,0 +1,143 @@
+"""A swap sent only as an export-area file reports the host code it carries
+(issue #2628).
+
+`_authored_host_bodies` treated a candidate as authored only when it arrived as
+inline `source` or `modules`. A file inside an export directory is the author's
+by its PATH and always has been: `revl_export`, the one MCP verb that writes to
+disk, writes source only under `<root>/.revl/export/`, and `export_area.py`
+reads that as authorship without consulting the trust mode at all. So a swap
+whose candidate was only such a file came back with an empty list, and the
+approval ticket then carried neither `unreviewedHostCode` nor its warning: the
+operator approved a crossing without being told the composition carried
+unreviewed agent-authored host code.
+
+This is not the realm question next door. The realm-removal check needs a
+profile to have been APPLIED, so it gates on `AUTHORING.profile()`. The ticket
+question is whether the author WROTE this text, and for an export-area path the
+answer is yes whatever the trust mode. The two must not share a predicate.
+
+The test asserts the export-area ticket against the inline one for the same
+candidate rather than against a hardcoded list: the inline door is the control
+that already reported this field before the fix, so equality pins the export-area
+door to it without restating what the bodies are.
+"""
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+_BACKEND = ROOT / "backends" / "python"
+if str(_BACKEND) not in sys.path:
+    sys.path.insert(0, str(_BACKEND))
+
+from revl.export_area import EXPORT_DIR  # noqa: E402
+from revl.mcp import server  # noqa: E402
+
+needs_cordis = pytest.mark.skipif(
+    importlib.util.find_spec("cordis") is None,
+    reason="loading and swapping a live composition needs cordis-py "
+           "(`sh backends/python/setup.sh`, run under backends/python/.venv)",
+)
+
+_DECLS = ("service Ops { emission[notify] fn stash(p: Str) }\n"
+          "service Tool { fn describe() -> Str }\n")
+
+# the OPERATOR's host code, wired in as `AuthoringTrust.providers`
+_PROVIDER = ("extern emission[notify] fn notify(p: Str) = @py { return }\n"
+             "component OpsProvider provides ops: Ops {\n"
+             "  provide ops { fn stash(p) { emit notify(p) } }\n"
+             "}\n")
+
+_BASE = (_DECLS + "component ToolV1 provides tool: Tool {\n"
+         '  provide tool { fn describe() = "v1" }\n'
+         "}\n")
+
+# the successor: its ACTIVATION reaches the operator's class-(c) emission, which
+# is what holds the swap on an approval ticket at all
+_CANDIDATE = (_DECLS + "component ToolV2 requires ops: Ops provides tool: Tool {\n"
+              '  emit ops.stash("boot")\n'
+              '  provide tool { fn describe() = "v2" }\n'
+              "}\n")
+
+
+@pytest.fixture
+def transport(tmp_path):
+    """A server rooted at `tmp_path` under a trusted host-code author, driven
+    over the wire. Nothing below reads internal state: every assertion is on a
+    payload that crossed the transport."""
+    from revl.mcp.session import Session
+
+    before = server.AUTHORING
+    before_session = server.SESSION
+    server.SESSION = Session()
+    server.set_authoring_trust(host_code=True, granted=None,
+                               providers={"prov.rvl": _PROVIDER},
+                               roots=(str(tmp_path),))
+
+    def call(name: str, arguments: dict) -> dict:
+        response = server.handle({"jsonrpc": "2.0", "id": 1,
+                                  "method": "tools/call",
+                                  "params": {"name": name,
+                                             "arguments": arguments}})
+        return json.loads(response["result"]["content"][0]["text"])
+
+    yield call
+
+    if server.SESSION.loaded:
+        server.SESSION.unload()
+    server.SESSION = before_session
+    server.AUTHORING = before
+
+
+def _exported(base: Path, text: str) -> Path:
+    """`text` as a file inside the root's export directory."""
+    path = base / EXPORT_DIR / "tool.rvl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _swapped_ticket(transport, tmp_path, candidate: dict) -> dict:
+    base = tmp_path / "base.rvl"
+    base.write_text(_BASE, encoding="utf-8")
+    server.SESSION.approval_policy = "auto"
+    assert transport("revl_load", {"files": [str(base)],
+                                   "record": True})["ok"] is True
+    result = transport("revl_swap", {**candidate, "replacing": ["ToolV1"]})
+    assert result["ok"] is False, result
+    assert result["approvalRequired"] is True, result
+    return result["ticket"]
+
+
+@needs_cordis
+def test_an_export_area_swap_reports_the_host_code_the_inline_one_does(
+        transport, tmp_path):
+    """The same candidate through both doors must disclose the same thing.
+
+    The inline swap is the control: it reported `unreviewedHostCode` before this
+    fix. The export-area swap reported nothing, which is the defect. Asserting
+    equality pins the fixed door to the working one and cannot pass by both
+    being empty, because the emptiness is checked first.
+    """
+    inline = _swapped_ticket(transport, tmp_path, {"source": _CANDIDATE})
+    assert inline.get("unreviewedHostCode"), (
+        "the inline control reports no unreviewed host code, so this candidate "
+        f"does not exercise the field at all: {inline}")
+
+    exported = _exported(tmp_path, _CANDIDATE)
+    from revl.export_area import in_export_area
+    assert in_export_area(str(exported))  # really in the export area
+
+    server.SESSION.unload()
+    through_file = _swapped_ticket(transport, tmp_path,
+                                   {"files": [str(exported)]})
+
+    assert through_file.get("unreviewedHostCode") == \
+        inline["unreviewedHostCode"], through_file
+    assert through_file.get("unreviewedHostCodeWarning") == \
+        inline.get("unreviewedHostCodeWarning"), through_file
