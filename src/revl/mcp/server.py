@@ -1526,7 +1526,13 @@ def _swap_inline(arguments: dict, stored: dict, replacing: tuple, before) -> dic
     # this swap and takes its placements with it; one it carries is compared
     # per key for what it provides (#2523) and per name for what it requires
     # (#2585).
-    exported = _exported_candidate(files, compile_report)
+    # issue #2600: only text that actually compiled under the profile is
+    # compared. With `--author-trust trusted` the profile is none, so an
+    # export-area file compiles exactly as it did before #2524, it stays the
+    # operator's own, and a swap of it keeps the #2487 exemption. Deciding by
+    # path alone would refuse that operator a swap this door admitted before.
+    exported = (_exported_candidate(files, compile_report)
+                if AUTHORING.profile() is not None else None)
     if source is not None or modules or exported is not None:
         refused = _realm_removal_refused(
             running, full,

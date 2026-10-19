@@ -145,3 +145,25 @@ def test_untrusted_swap_of_an_operator_file_with_no_exported_text_is_admitted(
     assert swapped.get("swapped") is True, swapped
     assert _realms("TenantAApp") == {}
     assert "SharedStore" in _running()
+
+
+def test_trusted_swap_of_an_exported_file_dropping_the_clause_is_admitted(
+        loaded):  # noqa: F811
+    """The exemption turns on who wrote the text, not where the file sits.
+
+    Under a trusted author there is no profile, so an export-area file is not
+    the agent's text and compiles exactly as it did before #2524. It stays the
+    operator's own file and this door admits it, clause dropped or not, as it
+    admitted it before #2600. Deciding by path alone would refuse this
+    operator a swap that used to work, which is why the export-area part is
+    read only while a profile is in play.
+    """
+    server_mod.set_authoring_trust(host_code=True)
+    assert server_mod.AUTHORING.profile() is None  # the trusted operator
+    placed = _exported(loaded.parent, _candidate(keep_app_clause=False))
+    assert server_mod._export_jail.in_export_area(str(placed))  # really exported
+    swapped = _swap_files(placed)
+    assert swapped["ok"] is True, swapped
+    assert swapped.get("swapped") is True, swapped
+    assert _realms("TenantAApp") == {}
+    assert "SharedStore" in _running()
