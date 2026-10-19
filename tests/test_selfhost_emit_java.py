@@ -716,10 +716,11 @@ NO_JAVA_BODY_AND_REQUIRED_STREAM = (ROOT / "tests" / "fixtures"
                                     / "emit_java_refusals"
                                     / "extern_no_java_body.rvl").read_text() + """
 
-component Tap provides acme::ops: Ops {
-  provide acme::ops {
-    fn ferry(sink) { consume x from sink as Str { emit deliver(sink, x) } }
-  }
+event Tap(key: tap_id) { tap_id: Str }
+service Sink { emission fn deliver(id: Str) }
+
+component Relay requires feed: Stream[Tap], sink: Sink {
+  on Tap as t { emit sink.deliver(t.tap_id) }
 }
 """
 
