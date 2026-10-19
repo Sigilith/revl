@@ -9160,6 +9160,18 @@ class Session:
                 f"({rule.to_dsl()!r}) - an offer already covered by a live rule is "
                 f"refused rather than duplicated (item 251, the apply ambiguity "
                 f"refusal)")
+        # issue #2551: a distilled rule is STANDING auto-approval, the same yes as
+        # a standing grant installed by a different verb, so the separation check
+        # has to answer here too or this route is the way around it - exactly the
+        # reason the #1982 and #1062 checks just below also live here rather than
+        # only at the mint. The applier is not answering a ticket another identity
+        # raised: there is no ticket, and `offer.operator` names whose yeses were
+        # distilled, so `None` is the right argument - the proactive branch of
+        # `_refuse_self_grant`, the same one `revl_approve(capability=...)` takes.
+        # Placed after only the duplicate-text refusal, which is not a property of
+        # identity, and before both refusals about the rule's own shape:
+        # unconditional, it gates every mutation and cannot be reached past.
+        self._refuse_self_grant(None)
         # issue #1982: the hard gate, and the reason the check lives HERE as well
         # as at the offer. A distilled rule is STANDING auto-approval reached by a
         # different verb than the mint, so a never-standing clause enforced only on
