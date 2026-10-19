@@ -149,3 +149,33 @@ def test_an_export_area_swap_reports_the_host_code_the_inline_one_does(
         inline["unreviewedHostCode"], through_file
     assert through_file.get("unreviewedHostCodeWarning") == \
         inline.get("unreviewedHostCodeWarning"), through_file
+
+
+@needs_cordis
+def test_a_swap_of_operator_files_outside_the_export_area_reports_nothing(
+        transport, tmp_path):
+    """The other direction, which the fix must not break.
+
+    A candidate that is entirely jailed `files` OUTSIDE the export area is the
+    operator's own, and its host bodies are the operator's. Reporting them as
+    unreviewed agent code would raise a false alarm on the operator's own
+    program.
+
+    This control exists because the two ways to get it wrong fail in opposite
+    directions, and only one of them is caught by the test above. Passing
+    `host_bodies=None` instead of widening the condition would make the approval
+    path compute the bodies itself with no transport test at all, and every
+    operator load carrying host bodies would then raise a ticket. Pinning this
+    case is what stops that simplification from looking correct.
+    """
+    from revl.export_area import in_export_area
+
+    operator_file = tmp_path / "operator.rvl"
+    operator_file.write_text(_CANDIDATE, encoding="utf-8")
+    assert not in_export_area(str(operator_file))  # really outside the export area
+
+    ticket = _swapped_ticket(transport, tmp_path,
+                             {"files": [str(operator_file)]})
+    assert not ticket.get("unreviewedHostCode"), (
+        "an operator's own file is being reported as unreviewed agent host "
+        f"code, which is a false alarm on their own program: {ticket}")
