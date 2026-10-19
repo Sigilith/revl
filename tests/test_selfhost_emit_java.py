@@ -703,3 +703,34 @@ def test_a_refusal_before_a_fault_test_keeps_the_reference_order(
     markers = re.findall(r"<<UNSUPPORTED-[A-Z-]+:", emitted["emit_java_src"](ir))
     assert "<<UNSUPPORTED-FAULT-TEST:" in markers, markers
     assert markers[0] == first, markers
+
+
+# issue #2492: the reference emits the extern block while it builds the class
+# body, which it reaches BEFORE it renders components, and it renders
+# components before it refuses a required `Stream[T]` coeffect. So a document
+# carrying both a bodyless extern and a required stream must name the extern
+# first on the port. Read from the reference rather than assumed: emit.py
+# reaches _emit_v3_externs while extending the class body, and
+# _refuse_required_stream fires from component rendering.
+NO_JAVA_BODY_AND_REQUIRED_STREAM = (ROOT / "tests" / "fixtures"
+                                    / "emit_java_refusals"
+                                    / "extern_no_java_body.rvl").read_text() + """
+
+component Tap provides acme::ops: Ops {
+  provide acme::ops {
+    fn ferry(sink) { consume x from sink as Str { emit deliver(sink, x) } }
+  }
+}
+"""
+
+
+def test_a_bodyless_extern_is_named_before_a_required_stream(
+        emitted, reference, tmp_path):
+    path = tmp_path / "no_body_and_stream.rvl"
+    path.write_text(NO_JAVA_BODY_AND_REQUIRED_STREAM)
+    ir = compile_files([str(path)])
+    markers = re.findall(r"<<UNSUPPORTED-[A-Z-]+:", emitted["emit_java_src"](ir))
+    assert "<<UNSUPPORTED-EXTERN-NO-JAVA-BODY:" in markers, markers
+    assert "<<UNSUPPORTED-REQUIRED-STREAM:" in markers, markers
+    assert (markers.index("<<UNSUPPORTED-EXTERN-NO-JAVA-BODY:")
+            < markers.index("<<UNSUPPORTED-REQUIRED-STREAM:")), markers
