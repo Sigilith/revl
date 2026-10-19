@@ -2298,8 +2298,24 @@ class Session:
                 comp = next((c for c in (ir.get("components") or [])
                              if c.get("name") == name), {})
                 keys = list((comp.get("provides") or {}).keys())
-                reason = f"the successor fiber is {state} after the swap load"
-                if state == "PENDING":
+                if state == "FAILED":
+                    # issue #2455: what says WHY the activation failed is the
+                    # error cordis recorded on the fiber, and
+                    # `_fiber_activation_error` is already the single reading
+                    # of that record (`state()`, issue #1895), so reuse it here
+                    # rather than deriving a second spelling of `fiber._error`.
+                    # A fiber left FAILED by a cancelled `_LazyTask` records no
+                    # error at all (item 372); say so rather than implying a
+                    # record exists and is empty.
+                    error = _fiber_activation_error(fiber)
+                    reason = ("the successor fiber is FAILED after the swap "
+                              "load: its activation did not complete and "
+                              "recorded no error")
+                    if error is not None:
+                        reason = ("the successor fiber is FAILED after the "
+                                  f"swap load: its activation raised "
+                                  f"{error['type']}: {error['message']}")
+                else:
                     # issue #2386: name the requirement that kept it PENDING
                     from .authoring_loop import pending_reason  # noqa: PLC0415
 
