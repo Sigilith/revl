@@ -866,13 +866,13 @@ LOWER_GAP_DOCS: dict[str, tuple[str, ...]] = {
         # `xs[0] + id(-1)`) is written without the reference's
         # `"operands": "Int"` annotation.
         "generic_fn.rvl",
-        # The same generic `id` called from a provide method, where the
-        # divergence is a different one (issue #2559): the reference IR's `+`
-        # there carries no `operands` key at all, and the native chain drops
-        # the whole provide method (`fn greet(&self, ..)`) together with its
-        # `ctx.provide("greeting", ..)` wiring. A non-generic control of the
-        # same shape is byte-exact.
-        "comp_provide_generic.rvl",
+        # The same generic `id` called from a provide method was listed here
+        # until issue #2603. Its residual was not the operand annotation above
+        # but the two header readers failing to match `fn apply[T](` and so
+        # answering empty, which cost the callable its declared fn type.
+        # Both now read through `fn_params_i` and this document reproduces
+        # byte-exactly, so the ledger no longer carries it. A non-generic
+        # control of the same shape was already byte-exact.
     ),
     # no residual: the fully-native chain reproduces the whole wasm corpus.
     "wasm": (),
