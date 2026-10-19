@@ -24,7 +24,7 @@
     },
     {
       "path": "components/assembler.rvl",
-      "sha256": "9ac672bc76816e9a95c48a252084649c6950e76fecfdc3f03b59cb58b428fa73"
+      "sha256": "60dfc4640b290ef0962683b04817a37bf48eefca70f07d8ef9092ffb64c96601"
     },
     {
       "path": "components/shipper.rvl",
@@ -32,13 +32,13 @@
     },
     {
       "path": "components/cli.rvl",
-      "sha256": "070bd6fa426f51a842d3622da639cd0f481633b8e4e1beb1609469d99854edbd"
+      "sha256": "aed2ae21d4b7a4a5bc64311987a43a799d28a51a46649b7ba5d9310b3f776709"
     }
   ],
   "imports": [
     {
       "path": "externs.rvl",
-      "sha256": ""
+      "sha256": "05dc178e5f19355fb267e9c574fe0122c8c95ed26d3b2a2637fb0209eb5ab09f"
     }
   ]
 }
