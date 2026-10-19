@@ -22,7 +22,7 @@
 // ts ports already use for their own missing body (issue #2492). The refusal's
 // text is asserted by
 // tests/test_selfhost_emit_java.py::test_an_extern_with_no_java_body_is_a_named_refusal.
-extern fn run_tool(name: Str) -> Str
+extern pure fn run_tool(name: Str) -> Str
   = @py { return name } = @ts { return name; } = @rs { name } = @go { return name }
 
 fn tag() -> Str {
