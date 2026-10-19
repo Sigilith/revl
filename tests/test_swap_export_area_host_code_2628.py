@@ -133,7 +133,15 @@ def test_an_export_area_swap_reports_the_host_code_the_inline_one_does(
     from revl.export_area import in_export_area
     assert in_export_area(str(exported))  # really in the export area
 
+    # Between the two doors, clear the session the way the established repair
+    # fixture does (test_untrusted_repair_realm_2520.py) rather than assuming an
+    # unload alone is enough: a held swap installs nothing, but it may leave
+    # pending state behind, and the second load has to start from the same
+    # position as the first or the two tickets are not comparable.
     server.SESSION.unload()
+    server.SESSION.proposals = {}
+    server.SESSION.pending_draft = None
+    server.SESSION.draft = None
     through_file = _swapped_ticket(transport, tmp_path,
                                    {"files": [str(exported)]})
 
