@@ -78,6 +78,18 @@ def _refusal(fibers: dict, ir: dict = _IR_FAILED):
     return excinfo.value
 
 
+def _why(fibers: dict, ir: dict = _IR_FAILED) -> str:
+    """The per-state part alone, without the sentence the gate appends.
+
+    The swap that catches this adds one fixed policy sentence naming BOTH
+    states: "...component failed to activate (FAILED) or has an unmet
+    requirement (PENDING)...". So the full string always contains both words
+    whatever the state actually is, and a negative assertion made against it
+    cannot tell the two apart. Those read this trimmed prefix instead."""
+    reason = _refusal(fibers, ir).reason
+    return reason.split(". A swap must not install")[0]
+
+
 def test_a_failed_successor_carries_the_error_its_activation_raised():
     """The fix. On base `reason` stopped at "the successor fiber is FAILED
     after the swap load" and named neither the exception nor its text, so an
@@ -86,8 +98,8 @@ def test_a_failed_successor_carries_the_error_its_activation_raised():
     reason = _refusal({"Toolkit": _Fiber(1, raised)}).reason
     assert reason.startswith("the successor fiber is FAILED after the swap "
                              "load"), reason
-    assert reason.endswith("its activation raised ModuleNotFoundError: "
-                           "No module named 'no_such_module_xyz'"), reason
+    assert ("its activation raised ModuleNotFoundError: "
+           "No module named 'no_such_module_xyz'") in reason, reason
     # the detail rides in the message a caller actually receives, too
     assert "ModuleNotFoundError" in str(_refusal({"Toolkit": _Fiber(1, raised)}))
 
@@ -98,8 +110,10 @@ def test_a_failed_successor_with_no_recorded_error_says_so():
     reason = _refusal({"Toolkit": _Fiber(1)}).reason
     assert reason.startswith("the successor fiber is FAILED after the swap "
                              "load"), reason
-    assert reason.endswith("its activation did not complete and recorded no "
-                           "error"), reason
+    assert ("its activation did not complete and recorded no error"
+            in reason), reason
+    # "raised" belongs only to the other arm, and the appended policy sentence
+    # does not contain it, so the whole reason can be read here
     assert "raised" not in reason, reason
 
 
@@ -112,16 +126,18 @@ def test_a_pending_successor_still_names_the_unmet_requirement():
     assert "`Toolkit` requires `Audit: Audit`, which nothing in the " \
            "composition provides" in reason, reason
     assert "unmet requirement" in reason, reason
-    # and it does not borrow the FAILED wording
-    assert "FAILED" not in reason, reason
-    assert "its activation raised" not in reason, reason
+    # and it does not borrow the FAILED wording. Both negatives read the
+    # per-state part: the appended policy sentence names FAILED either way.
+    why = _why({"Toolkit": _Fiber(0)}, ir=_IR_PENDING)
+    assert "FAILED" not in why, why
+    assert "its activation raised" not in why, why
 
 
 def test_the_two_states_are_told_apart_by_their_detail():
     """A caller that must branch on the answer can: the refusal differs in its
     why, not only in the state word both halves already carried."""
-    failed = _refusal({"Toolkit": _Fiber(1, RuntimeError("boom"))}).reason
-    pending = _refusal({"Toolkit": _Fiber(0)}, ir=_IR_PENDING).reason
+    failed = _why({"Toolkit": _Fiber(1, RuntimeError("boom"))})
+    pending = _why({"Toolkit": _Fiber(0)}, ir=_IR_PENDING)
     assert "RuntimeError: boom" in failed
     assert "unmet requirement" not in failed
     assert "unmet requirement" in pending
