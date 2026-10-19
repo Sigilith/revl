@@ -56,7 +56,7 @@
 
 ["reason", "backends-java-emit-py-declares-secret-item-421", "backends/java/emit.py::_declares_secret: item 421 F6: scans the IR for a surviving `Secret[T]` marking (service param `secret`, extern `secret_return`, config-field `secret`) to gate `_SECRET_MODE`. No java corpus document declares a secret, so the scan's positive branches never run; selfhost/emit_java.rvl has no secret-redaction port (item-429(d)), so a corpus document reaching them would flip the byte-agreement oracle red rather than close this gap."]
 
-["function", "backends-java-emit-py-declares-secret-item-421", "_declares_secret", 7, 7]
+["function", "backends-java-emit-py-declares-secret-item-421", "_declares_secret", 4, 7]
 
 ["reason", "backends-java-emit-py-dedup-colour-erased-poly", "backends/java/emit.py::_dedup_colour_erased_poly_externs._rewrite: Recursive callee-name rewriting runs only after an erased polymorphic extern collision is found; extern emission is explicitly deferred."]
 
