@@ -490,8 +490,7 @@ strand a recoverable WAL.
 Both tiers carry the stat check (`install_captured_sidecar` in
 `backends/python/revl_fs_workspace.py`, `installCapturedSidecar` in
 `backends/typescript/revl_fs_ts.ts`, each a listed `syscall-time` entry point);
-the digest comparison is the Python host's, and #2652 tracks it for the
-TypeScript host. `tests/test_fs_restore_sidecar_identity_1016.py` and
+the digest comparison is in both hosts, the TypeScript peer landing with #2652. `tests/test_fs_restore_sidecar_identity_1016.py` and
 `backends/typescript/tests/fs_restore_sidecar_identity.test.ts` pin the tampered,
 swapped, re-linked and non-regular sidecars, the post-install re-check, and the
 untampered control that must stay silent.
@@ -524,9 +523,14 @@ second hardlink, and a file whose mode denies read. So the file type and the
 link count are not constants here, they are facts the capture recorded, and the
 inverse compares them against the record. A directory replacing a parked regular
 file is still `EOUTSIDE`; a link added since the park is still `EMULTILINK`; an
-honest `rm` of a directory still reverses. For the same reason the sidecar is
-`lstat`ed through the chain-checked parent rather than opened: opening a
-write-only file to check it would refuse a reversal `rm` accepted.
+honest `rm` of a directory still reverses. For the same reason the type, link
+count and stat fields are read by `lstat` through the chain-checked parent:
+opening every parked file to check it would refuse a reversal `rm` accepted.
+Only when the capture records a `sha256`, which `rm` records for a readable
+regular file (including one that already carried a second link), does the
+inverse open the parked inode `O_RDONLY|O_NOFOLLOW` through that parent and
+re-read the bytes. A parked directory and a file whose mode denies read carry no
+digest and stay stat-only.
 
 The failure direction matches: a sidecar that cannot be shown to be the parked
 one is reported as `restore-residue` through the existing merged residue Record
