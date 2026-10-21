@@ -272,12 +272,12 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
-          # The files the nine suites observe: the MCP session/swap and
+          # The files the eleven suites observe: the MCP session/swap and
           # authoring modules, the runtime, compiler, plan and apply doors they
           # drive, the suites themselves, and the script and workflow that
           # provision and route them. A new dependency belongs here, with the
           # suite that needs it.
-          SWAP_RE: '^(src/revl/(mcp/|admission\.py|runtime\.py|run\.py|compiler\.py|lower\.py|placement\.py|plan\.py|apply\.py)|tests/test_mcp_swap_template_2423\.py|tests/test_self_extending_334\.py|tests/test_mcp_authoring_loop_1704\.py|tests/test_swap_author_flag_2518\.py|tests/test_handoff_realm_2510\.py|tests/test_swap_transactional_1446\.py|tests/test_load_export_area_host_code_2641\.py|tests/test_mcp_authored_host_bodies_2676\.py|tests/test_load_ticket_bodies_2675\.py|tests/test_334_reviewed_name_substitution\.py|backends/python/setup\.sh|\.github/workflows/ci\.yml)'
+          SWAP_RE: '^(src/revl/(mcp/|admission\.py|runtime\.py|run\.py|compiler\.py|lower\.py|placement\.py|plan\.py|apply\.py)|tests/test_mcp_swap_template_2423\.py|tests/test_self_extending_334\.py|tests/test_mcp_authoring_loop_1704\.py|tests/test_swap_author_flag_2518\.py|tests/test_handoff_realm_2510\.py|tests/test_mcp_declared_instance_capture_2673\.py|tests/test_mcp_declared_consumer_2679\.py|tests/test_swap_transactional_1446\.py|tests/test_load_export_area_host_code_2641\.py|tests/test_mcp_authored_host_bodies_2676\.py|tests/test_load_ticket_bodies_2675\.py|tests/test_334_reviewed_name_substitution\.py|backends/python/setup\.sh|\.github/workflows/ci\.yml)'
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" != "pull_request" ]; then
@@ -1158,12 +1158,14 @@ jobs:
   # 18 of the 19 in tests/test_mcp_swap_template_2423.py, all 26 in
   # tests/test_self_extending_334.py, 7 of the 18 in
   # tests/test_mcp_authoring_loop_1704.py, 8 of the 9 in
-  # tests/test_swap_author_flag_2518.py and 11 of the 13 in
-  # tests/test_handoff_realm_2510.py, and all 3 in
+  # tests/test_swap_author_flag_2518.py, 11 of the 13 in
+  # tests/test_handoff_realm_2510.py, all 4 in
+  # tests/test_mcp_declared_instance_capture_2673.py, all 4 in
+  # tests/test_mcp_declared_consumer_2679.py and all 3 in
   # tests/test_load_ticket_bodies_2675.py. `frontend-cordis` is what runs them
   # with the runtime, and since issue #1678 it is off pull requests. This job is
   # the dedicated PR-only path: the same `backends/python/setup.sh` and the same
-  # CORDIS_PY_PIN the merge-queue job uses, then the nine suites under the
+  # CORDIS_PY_PIN the merge-queue job uses, then the eleven suites under the
   # #2642 receipt so an all-skipped run is red rather than green. The 1446
   # swap-transaction module and the 2641 load-area regression are entirely or
   # partly cordis-guarded, and the 2676 disclosure module's plan-artifact apply
@@ -1187,13 +1189,13 @@ jobs:
       - run: sh backends/python/setup.sh
       - name: swap and authoring suites under the pinned runtime
         env:
-          SUITES: "tests/test_mcp_swap_template_2423.py tests/test_self_extending_334.py tests/test_mcp_authoring_loop_1704.py tests/test_swap_author_flag_2518.py tests/test_handoff_realm_2510.py tests/test_swap_transactional_1446.py tests/test_load_export_area_host_code_2641.py tests/test_mcp_authored_host_bodies_2676.py tests/test_load_ticket_bodies_2675.py"
+          SUITES: "tests/test_mcp_swap_template_2423.py tests/test_self_extending_334.py tests/test_mcp_authoring_loop_1704.py tests/test_swap_author_flag_2518.py tests/test_handoff_realm_2510.py tests/test_mcp_declared_instance_capture_2673.py tests/test_mcp_declared_consumer_2679.py tests/test_swap_transactional_1446.py tests/test_load_export_area_host_code_2641.py tests/test_mcp_authored_host_bodies_2676.py tests/test_load_ticket_bodies_2675.py"
         run: |
           set -euo pipefail
           log=$(mktemp)
           rc=0
           set +e
-          backends/python/.venv/bin/python -m pytest tests/test_mcp_swap_template_2423.py tests/test_self_extending_334.py tests/test_mcp_authoring_loop_1704.py tests/test_swap_author_flag_2518.py tests/test_handoff_realm_2510.py tests/test_swap_transactional_1446.py tests/test_load_export_area_host_code_2641.py tests/test_mcp_authored_host_bodies_2676.py tests/test_load_ticket_bodies_2675.py -q 2>&1 | tee "$log"
+          backends/python/.venv/bin/python -m pytest tests/test_mcp_swap_template_2423.py tests/test_self_extending_334.py tests/test_mcp_authoring_loop_1704.py tests/test_swap_author_flag_2518.py tests/test_handoff_realm_2510.py tests/test_mcp_declared_instance_capture_2673.py tests/test_mcp_declared_consumer_2679.py tests/test_swap_transactional_1446.py tests/test_load_export_area_host_code_2641.py tests/test_mcp_authored_host_bodies_2676.py tests/test_load_ticket_bodies_2675.py -q 2>&1 | tee "$log"
           rc=${PIPESTATUS[0]}
           set -e
           python3 tools/affected_pytest_receipt.py --log "$log" --pytest-exit "$rc" --selection "$SUITES"
