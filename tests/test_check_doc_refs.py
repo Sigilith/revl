@@ -186,6 +186,35 @@ def test_a_ledger_entry_without_a_reason_is_a_red(tmp_path):
                       "--check"]) == 2
 
 
+def test_write_repairs_a_unique_moved_anchor_without_guessing(tmp_path, monkeypatch):
+    root = _tree(tmp_path)
+    _write(root, "src/thing.py", "preamble = 0\ntarget = 1\n")
+    docs = _write(root, "docs/page.md", f"see `{_ref('src/thing.py', 99)}`\n")
+    tool = _tool()
+    # Simulate the committed source before an insertion moved the cited line.
+    (root / "src/thing.py").write_text(
+        "inserted = 0\npreamble = 0\ntarget = 1\n", encoding="utf-8")
+    monkeypatch.setattr(tool, "_head_line",
+                        lambda _root, _rel, _line: "target = 1")
+    assert tool.main(["--root", str(root), "--write"]) == 0
+    assert docs.read_text(encoding="utf-8") == "see `src/thing.py:3`\n"
+
+
+def test_write_reports_changed_content_instead_of_renumbering(tmp_path, monkeypatch,
+                                                               capsys):
+    root = _tree(tmp_path)
+    _write(root, "src/thing.py", "preamble = 0\ntarget = 1\n")
+    docs = _write(root, "docs/page.md", f"see `{_ref('src/thing.py', 99)}`\n")
+    tool = _tool()
+    (root / "src/thing.py").write_text(
+        "inserted = 0\npreamble = 0\nchanged = 1\n", encoding="utf-8")
+    monkeypatch.setattr(tool, "_head_line",
+                        lambda _root, _rel, _line: "target = 1")
+    assert tool.main(["--root", str(root), "--write"]) == 1
+    assert docs.read_text(encoding="utf-8") == "see `src/thing.py:99`\n"
+    assert "changed-content" in capsys.readouterr().out
+
+
 def test_a_vendored_or_hidden_checkout_is_not_scanned(tmp_path):
     root = _tree(tmp_path)
     # A vendored checkout is not part of the documented tree. The CI jobs that
@@ -251,3 +280,4 @@ def test_the_committed_ledger_covers_the_real_tree():
     assert report.new_findings == []
     assert {e.get("kind") for e in report.ledger} <= {"missing", "stale"}
     assert all(e["reason"].strip() for e in report.ledger)
+
