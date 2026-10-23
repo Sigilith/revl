@@ -94,6 +94,7 @@ from . import effect_classes as _effect_classes
 from . import leases as _leases
 from . import operator as _operator
 from ..errors import RevlError
+from .. import answer as _answer
 from . import gauntlet as _gauntlet
 from . import quarantine as _quarantine
 from . import quorum as _quorum
@@ -1200,31 +1201,46 @@ def _repair_field(repair: dict | None) -> dict:
     return {} if repair is None else {"repair": repair}
 
 
-def _session_error(message: str | BaseException, category: str = "session",
-                   fix: str | None = None, **extra) -> dict:
+def _session_error(message: str | BaseException, category: str | None = None,
+                   fix: str | None = None, refusal_code: str | None = None,
+                   **extra) -> dict:
     """A session refusal. `message` is the prose, or the exception that
     refused. Its next call, when it has one (issue #1691), is resolved and
     attached by `remedy`, which also names it at the end of the message.
 
-    `fix` is the mechanical remedy in the caller's own terms — the one edit to
-    the arguments that makes this same call work — and rides on the diagnostic
+    `fix` is the mechanical remedy in the caller's own terms, the one edit to
+    the arguments that makes this same call work, and rides on the diagnostic
     when the refusal has one (issue #2035). It is deliberately not the `next`
     call: a next call is a *different* call to make, where `fix` is this call
     with one argument dropped.
+
+    `refusal_code` (issue #2858) names a registered code, and the category is
+    read from that registry entry rather than passed here, so a code and its
+    category cannot disagree. The structured `refusal` rides the answer and
+    keeps `message` free to change. A `code` arriving in `extra` (a
+    `SessionError`'s own) stays what it was: a carried classification, not a
+    registered one.
 
     Issue #2845: a refusal exception that carries a structured `repair` (a
     `SessionError` with a code and a minimal edit, e.g. STATE_UNDISCLOSED)
     hands it to the payload here, beside the diagnosis. It is additive, and
     the prose message is untouched."""
-    carried = (getattr(message, "repair", None)
-               if isinstance(message, BaseException) else None)
+    refused_error = message if isinstance(message, BaseException) else None
+    carried = getattr(refused_error, "repair", None) if refused_error is not None else None
     message, remedy = _remedy.resolve(message, extra)
-    diagnostic = {"severity": "error", "code": "REVL", "category": category,
+    if refusal_code is not None:
+        category = _answer.define(refusal_code).category
+    diagnostic = {"severity": "error", "code": "REVL",
+                  "category": category or "session",
                   "message": message, **_fix_field(fix)}
     payload = {"ok": False, "diagnostics": [diagnostic], **extra}
     if carried is not None and "repair" not in payload:
         payload.update(_repair_field(carried))
-    return _remedy.attach(payload, remedy)
+    payload = _remedy.attach(payload, remedy)
+    if refusal_code is not None:
+        payload["code"] = refusal_code
+        payload = _answer.attach_refusal(payload, refusal_code, message, fix)
+    return payload
 
 
 # -- content handles (issue #2852) -------------------------------------------
@@ -3786,12 +3802,17 @@ def _parse_junit(path: str) -> list[dict]:
     return [_test_entry(case) for case in tree.getroot().iter("testcase")]
 
 
-def _test_run_refusal(message: str, code: str, **extra) -> dict:
+def _test_run_refusal(message: str, code: str, location: str | None = None,
+                      repair: str | None = None, **extra) -> dict:
     """A named refusal from `revl_test_run`, with the run's receipt when it has
     one. The verdict vocabulary is shared with a completed run, so a caller
-    reads `verdict` first and `code` when it is `refused`."""
-    return _session_error(message, category="usage", code=code, refused=True,
-                          verdict="refused", **extra)
+    reads `verdict` first and `code` when it is `refused`. `location` names the
+    argument to change and `repair` the change, both carried in the answer's
+    structured `refusal` (issue #2858)."""
+    fields = {"location": location, "repair": repair, **extra}
+    return _session_error(message, refusal_code=code, refused=True,
+                          verdict="refused",
+                          **{k: v for k, v in fields.items() if v is not None})
 
 
 def _tool_test_run(arguments: dict) -> dict:
@@ -3810,39 +3831,49 @@ def _tool_test_run(arguments: dict) -> dict:
         return _test_run_refusal(
             "`selection` is required: the test paths or pytest node ids to run, "
             "e.g. [\"tests/test_mcp.py\"]. An empty selection is refused, so a "
-            "run over nothing cannot read as green", "EMPTY_SELECTION")
+            "run over nothing cannot read as green", "EMPTY_SELECTION",
+            location="selection",
+            repair="pass the test paths or node ids to run")
     if not isinstance(selection, list) or not selection:
         return _test_run_refusal(
             "`selection` must be a non-empty array of test paths or node ids",
-            "BAD_SELECTION")
+            "BAD_SELECTION", location="selection",
+            repair="pass a non-empty array of test paths or node ids")
     if not all(isinstance(item, str) and item.strip() for item in selection):
         return _test_run_refusal(
             "every `selection` entry must be a non-empty test path or node id",
-            "BAD_SELECTION")
+            "BAD_SELECTION", location="selection",
+            repair="pass only non-empty test paths or node ids")
     for item in selection:
         if item.startswith("-"):
             return _test_run_refusal(
                 f"`selection` entry `{item}` looks like a pytest option; this "
                 "verb takes test paths and node ids, not options",
-                "BAD_SELECTION")
+                "BAD_SELECTION", location="selection",
+                repair="pass test paths or node ids, not pytest options")
         if not item.split("::", 1)[0].strip():
             return _test_run_refusal(
                 f"`selection` entry `{item}` names no path before `::`",
-                "BAD_SELECTION")
+                "BAD_SELECTION", location="selection",
+                repair="put a test path before `::`")
     cwd = arguments.get("cwd")
     if not isinstance(cwd, str) or not cwd.strip():
         return _test_run_refusal(
             "`cwd` is required: the working directory pytest runs in",
-            "BAD_CWD")
+            "BAD_CWD", location="cwd",
+            repair="pass the directory pytest runs in")
     cwd = os.path.realpath(os.path.abspath(cwd))
     if not os.path.isdir(cwd):
-        return _test_run_refusal(f"`cwd` {cwd} is not a directory", "BAD_CWD")
+        return _test_run_refusal(f"`cwd` {cwd} is not a directory", "BAD_CWD",
+                                 location="cwd",
+                                 repair="pass an existing directory")
     timeout = arguments.get("timeout", _TEST_RUN_TIMEOUT)
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) \
             or not timeout > 0:
         return _test_run_refusal(
             f"`timeout` must be a positive number of seconds, not {timeout!r}",
-            "BAD_TIMEOUT")
+            "BAD_TIMEOUT", location="timeout",
+            repair="pass a positive number of seconds")
     # a test selection is a path argument like any other: the tree it can run
     # and the directory it runs in stay inside the operator-sanctioned roots
     roots = _file_roots()
@@ -3859,7 +3890,10 @@ def _tool_test_run(arguments: dict) -> dict:
         return _test_run_refusal(
             f"refused: {named} is outside the operator-sanctioned root(s) "
             f"[{allowed}]; a selection and its working directory are confined "
-            "like every other path argument", "OUTSIDE_ROOT")
+            "like every other path argument", "OUTSIDE_ROOT",
+            location="cwd" if cwd in outside else "selection",
+            repair="use a selection and working directory inside a "
+                   "sanctioned root")
     fd, report = tempfile.mkstemp(prefix="revl-test-run-", suffix=".xml")
     os.close(fd)
     command = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
@@ -3875,12 +3909,16 @@ def _tool_test_run(arguments: dict) -> dict:
             return _test_run_refusal(
                 f"the selection did not finish within {timeout:g} s; raise "
                 "`timeout` or narrow the selection", "TIMEOUT",
+                location="timeout",
+                repair="raise `timeout` or narrow the selection",
                 receipt={"command": command, "cwd": cwd, "exitCode": None,
                          "durationSeconds": round(time.monotonic() - started, 3),
                          "timeoutSeconds": float(timeout), "timedOut": True})
         except OSError as error:
             return _test_run_refusal(
-                f"pytest could not be started: {error}", "TEST_RUN_FAILED")
+                f"pytest could not be started: {error}", "TEST_RUN_FAILED",
+                location="pytest",
+                repair="make pytest importable by this server's interpreter")
         exit_code = proc.returncode
         elapsed = round(time.monotonic() - started, 3)
         tests = _parse_junit(report)
@@ -3895,7 +3933,9 @@ def _tool_test_run(arguments: dict) -> dict:
         return _test_run_refusal(
             f"the selection collected no test: pytest exited {exit_code} and "
             "reported no test case. Check the paths and node ids",
-            "NO_TESTS_COLLECTED", receipt=receipt, selection=list(selection))
+            "NO_TESTS_COLLECTED", location="selection",
+            repair="check the paths and node ids", receipt=receipt,
+            selection=list(selection))
     counts = {"total": len(tests), "passed": 0, "failed": 0, "skipped": 0,
               "errors": 0}
     for entry in tests:
@@ -3904,7 +3944,8 @@ def _tool_test_run(arguments: dict) -> dict:
     if counts["skipped"] == counts["total"]:
         return _test_run_refusal(
             f"all {counts['total']} selected test(s) were skipped; a skipped "
-            "run is not a passing run", "ALL_SKIPPED", receipt=receipt,
+            "run is not a passing run", "ALL_SKIPPED", location="selection",
+            repair="select tests that are not all skipped", receipt=receipt,
             counts=counts)
     verdict = "failed" if (counts["failed"] or counts["errors"]
                            or exit_code != 0) else "passed"
@@ -4282,7 +4323,8 @@ def _tool_check(arguments: dict) -> dict:
         return _session_error(
             "`session: true` checks the composition the session holds, so it "
             "takes no candidate of its own",
-            category="usage",
+            refusal_code="SESSION_TAKES_NO_CANDIDATE",
+            location="session",
             fix="drop `source`/`files` to check the held composition, or drop "
                 "`session` to check the candidate you sent")
     if _carries_candidate(arguments) and _held_draft() is not None:
@@ -4290,7 +4332,8 @@ def _tool_check(arguments: dict) -> dict:
             f"refused: revl_check with {_load_shape(arguments)} checks that "
             f"candidate, not {_held_draft_phrase()} — the draft is the loop's "
             "artifact, and a check that names a candidate cannot see it",
-            category="usage",
+            refusal_code="DRAFT_HELD",
+            location="source",
             fix="drop `source`/`files` to check the composition the session "
                 "holds",
             next=_remedy.call("revl_check", {"session": True}),
@@ -4422,7 +4465,8 @@ def _check_held(arguments: dict) -> dict:
         return _session_error(
             "`modules` are the in-memory `use` imports of a candidate: they "
             "ride beside `source` or `files`, and this call carries neither",
-            category="usage",
+            refusal_code="MODULES_WITHOUT_CANDIDATE",
+            location="modules",
             fix="pass `source` or `files` beside `modules`")
     vs = _held_working_set()
     if vs is None:
@@ -4430,7 +4474,8 @@ def _check_held(arguments: dict) -> dict:
             "revl_check needs a candidate: pass `source` or `files`, or check "
             "the composition the session holds — and this session holds none "
             "(nothing is loaded and no draft is open)",
-            category="usage",
+            refusal_code="NO_CANDIDATE",
+            location="source",
             fix="pass `source` or `files`",
             next=_remedy.load_next())
     candidate = _held_candidate(vs)
@@ -4439,7 +4484,9 @@ def _check_held(arguments: dict) -> dict:
             "the session's composition carries no source text to check — it "
             "was not loaded from `source` or `files`, so there is nothing to "
             "recompile",
-            category="session")
+            refusal_code="NOTHING_TO_CHECK",
+            location="session",
+            fix="reload the composition from `source` or `files`")
     result, _ir = _check_as_sent(candidate, held=vs)
     result["checked"] = "session"
     return result
@@ -7442,6 +7489,12 @@ def handle(message: dict) -> dict | None:
         # refusal just before it says so instead of repeating byte for byte
         state = _ambient.footer(SESSION)
         payload = _attempt_fields(name, payload)
+        # issue #2858: the converted verbs answer in the shared envelope, before
+        # the repeat rewrite and the footer: the repeat layer may prepend a
+        # REPEATED_REFUSAL diagnostic, and a refusal code is derived from the
+        # verb's own diagnostics so it cannot flip between attempts. The
+        # envelope describes the answer, the repeat layer rewrites its prose.
+        payload = _answer.envelope(name, payload)
         payload = _repeat.observe(name, params.get("arguments") or {}, payload, state)
         payload = _ambient.stamp(payload, state)
         result = {
@@ -7490,7 +7543,9 @@ def _hatch_call(arguments: dict) -> dict:
     payload = _unknown_arguments(verb, args) or _call_tool(verb, args)
     # issue #2690: the hatch is documented as indistinguishable from a direct
     # call, so its check/admit refusals carry the attempt fields too
-    return _attempt_fields(verb, payload)
+    # issue #2858: and a converted verb reached through the hatch answers in
+    # the same envelope a direct call does
+    return _answer.envelope(verb, _attempt_fields(verb, payload))
 
 
 def _unknown_arguments(name: str, arguments: dict) -> dict | None:
