@@ -701,17 +701,6 @@ jobs:
           # tests/test_landing_witness.py, which FAIL by name on a shallow
           # clone. They used to skip there, and a skip reads as a pass.
           fetch-depth: 0
-      # Fork pull requests are checked out from the contributor repository. Fetch
-      # the upstream base refs as well so real-history tests can resolve commits
-      # that exist only on the base repository.
-      - name: fetch upstream base history for fork pull request
-        if: ${{ github.event_name == 'pull_request' && github.repository != github.event.pull_request.base.repo.full_name }}
-        env:
-          BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
-        run: |
-          set -euo pipefail
-          git remote add revl-base "https://github.com/${BASE_REPOSITORY}.git"
-          git fetch --no-tags --prune revl-base "+refs/heads/*:refs/remotes/revl-base/*"
       # Issue #2210: rust is required here, and the cargo tests resolve cordis-rs
       # (a crates.io dependency, see backends/rust/emit.cargo_toml) over the
       # network. Cache the registry so one failed fetch does not turn a green job
@@ -1542,13 +1531,7 @@ jobs:
       # is the only ordering that can answer the question it is asking. This
       # step stays because it keeps the common case to zero network calls
       # inside the checker.
-      - name: fetch audit repository history
-        env:
-          AUDIT_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
-        run: |
-          set -euo pipefail
-          git remote add audit-base "https://github.com/${AUDIT_REPOSITORY}.git"
-          git fetch --no-tags --prune audit-base "+refs/heads/*:refs/remotes/audit-base/*"
+      - run: git fetch --no-tags --prune origin "+refs/heads/*:refs/remotes/origin/*"
       # The same run re-measures each baseline entry's WITNESS (issue #1434):
       # the merge's added inventory, the byte-identity of every file claimed
       # carried AT the commit that carried it (so a later edit to one of
@@ -1562,12 +1545,9 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[test]"
-      - name: run merged-PR landing audit against the base repository
-        env:
+      - env:
           GH_TOKEN: ${{ github.token }}
-          AUDIT_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
-          AUDIT_MAIN_REF: audit-base/${{ github.event.pull_request.base.ref || github.ref_name }}
-        run: python tools/check_merged_prs_landed.py --repo "$AUDIT_REPOSITORY" --main-ref "$AUDIT_MAIN_REF" --pinned run
+        run: python tools/check_merged_prs_landed.py --repo "${GITHUB_REPOSITORY}" --pinned run
 
   # The held-out scoring set (roadmap item 537, issue #1207). Every other
   # corpus that scores a change here is a file in this repository, so the
