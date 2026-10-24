@@ -8,6 +8,7 @@ pre-PR step relies on; it is the only test that reads the whole tree.
 """
 
 import json
+import subprocess
 from pathlib import Path
 
 from _load_by_path import load_by_path
@@ -44,6 +45,16 @@ def _findings(root):
     tool = _tool()
     _, references, findings = tool.examine(root)
     return references, findings
+
+
+def _git_commit(root):
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"],
+                   cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"],
+                   cwd=root, check=True)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=root, check=True)
 
 
 def test_a_line_past_the_end_of_the_file_is_stale(tmp_path):
@@ -186,33 +197,40 @@ def test_a_ledger_entry_without_a_reason_is_a_red(tmp_path):
                       "--check"]) == 2
 
 
-def test_write_repairs_a_unique_moved_anchor_without_guessing(tmp_path, monkeypatch):
+def test_write_repairs_a_unique_moved_anchor_from_git_history(tmp_path):
     root = _tree(tmp_path)
-    _write(root, "src/thing.py", "preamble = 0\ntarget = 1\n")
+    _write(root, "src/thing.py", "preamble = 0\nother = 0\ntarget = 1\n")
     docs = _write(root, "docs/page.md", f"see `{_ref('src/thing.py', 99)}`\n")
+    docs.write_text(f"see `{_ref('src/thing.py', 3)}`\n", encoding="utf-8")
+    _git_commit(root)
     tool = _tool()
-    # Simulate the committed source before an insertion moved the cited line.
     (root / "src/thing.py").write_text(
-        "inserted = 0\npreamble = 0\ntarget = 1\n", encoding="utf-8")
-    monkeypatch.setattr(tool, "_head_line",
-                        lambda _root, _rel, _line: "target = 1")
+        "other = 0\ntarget = 1\n", encoding="utf-8")
     assert tool.main(["--root", str(root), "--write"]) == 0
-    assert docs.read_text(encoding="utf-8") == "see `src/thing.py:3`\n"
+    assert docs.read_text(encoding="utf-8") == "see `src/thing.py:2`\n"
 
 
-def test_write_reports_changed_content_instead_of_renumbering(tmp_path, monkeypatch,
-                                                               capsys):
+def test_write_reports_changed_content_instead_of_renumbering(tmp_path, capsys):
     root = _tree(tmp_path)
-    _write(root, "src/thing.py", "preamble = 0\ntarget = 1\n")
-    docs = _write(root, "docs/page.md", f"see `{_ref('src/thing.py', 99)}`\n")
+    _write(root, "src/thing.py", "preamble = 0\nother = 0\ntarget = 1\n")
+    docs = _write(root, "docs/page.md", f"see `{_ref('src/thing.py', 3)}`\n")
+    _git_commit(root)
     tool = _tool()
     (root / "src/thing.py").write_text(
-        "inserted = 0\npreamble = 0\nchanged = 1\n", encoding="utf-8")
-    monkeypatch.setattr(tool, "_head_line",
-                        lambda _root, _rel, _line: "target = 1")
+        "other = 0\nchanged = 1\n", encoding="utf-8")
     assert tool.main(["--root", str(root), "--write"]) == 1
-    assert docs.read_text(encoding="utf-8") == "see `src/thing.py:99`\n"
+    assert docs.read_text(encoding="utf-8") == "see `src/thing.py:3`\n"
     assert "changed-content" in capsys.readouterr().out
+
+
+def test_write_is_green_on_a_clean_committed_tree(tmp_path, capsys):
+    root = _tree(tmp_path)
+    _write(root, "src/thing.py", "target = 1\n")
+    _write(root, "docs/page.md", f"see `{_ref('src/thing.py', 1)}`\n")
+    _git_commit(root)
+    tool = _tool()
+    assert tool.main(["--root", str(root), "--write"]) == 0
+    assert "no stale references to repair" in capsys.readouterr().out
 
 
 def test_a_vendored_or_hidden_checkout_is_not_scanned(tmp_path):
