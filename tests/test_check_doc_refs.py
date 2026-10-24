@@ -298,4 +298,3 @@ def test_the_committed_ledger_covers_the_real_tree():
     assert report.new_findings == []
     assert {e.get("kind") for e in report.ledger} <= {"missing", "stale"}
     assert all(e["reason"].strip() for e in report.ledger)
-
