@@ -200,8 +200,7 @@ def test_a_ledger_entry_without_a_reason_is_a_red(tmp_path):
 def test_write_repairs_a_unique_moved_anchor_from_git_history(tmp_path):
     root = _tree(tmp_path)
     _write(root, "src/thing.py", "preamble = 0\nother = 0\ntarget = 1\n")
-    docs = _write(root, "docs/page.md", f"see `{_ref('src/thing.py', 99)}`\n")
-    docs.write_text(f"see `{_ref('src/thing.py', 3)}`\n", encoding="utf-8")
+    docs = _write(root, "docs/page.md", f"see `{_ref('src/thing.py', 3)}`\n")
     _git_commit(root)
     tool = _tool()
     (root / "src/thing.py").write_text(
@@ -220,7 +219,7 @@ def test_write_reports_changed_content_instead_of_renumbering(tmp_path, capsys):
         "other = 0\nchanged = 1\n", encoding="utf-8")
     assert tool.main(["--root", str(root), "--write"]) == 1
     assert docs.read_text(encoding="utf-8") == "see `src/thing.py:3`\n"
-    assert "changed-content" in capsys.readouterr().out
+    assert "no-match" in capsys.readouterr().out
 
 
 def test_write_is_green_on_a_clean_committed_tree(tmp_path, capsys):

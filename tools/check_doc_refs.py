@@ -48,8 +48,9 @@ whose file exists, it uses `git blame` on the citing line to identify the
 revision that introduced the citation, reads the cited line from that
 revision, and searches for that exact line near the old location in the
 working tree. It rewrites the citing `path:line` only when the match is
-unique. A changed line, an ambiguous match, an unavailable Git parent, or a
-missing file is reported with its distinct reason and left untouched. It
+unique. A weak anchor, a no-match result, an ambiguous match, an unavailable
+Git parent, or a missing file is reported with its distinct reason and left
+untouched. It
 never renumbers from the line number alone. This gives mechanical line moves
 a repair path while making changed-content anchors a visible finding rather
 than silently blessing the wrong line.
@@ -481,19 +482,24 @@ def repair(root: pathlib.Path = REPO_ROOT, report: Report | None = None) -> tupl
     references = report.references
     findings = report.findings
     stale = {(f.source, f.cited, f.line) for f in findings if f.kind == "stale"}
+    line_counts: dict = {}
+    known = {(entry["path"], entry["line"]) for entry in report.ledger}
     repaired = []
     refused = []
     for finding in findings:
         if finding.kind == "missing":
+            if (finding.cited, finding.line) in known:
+                continue
             refused.append(f"missing-file: {finding.source} cites "
                            f"{finding.cited}:{finding.line}")
     for reference in references:
         key = (reference.source, reference.cited, reference.line)
         if key not in stale:
             continue
-        line_counts = {}
         _kind, _detail, rel = resolve(reference, root, line_counts)
         if rel is None:
+            if (reference.cited, reference.line) in known:
+                continue
             refused.append(f"missing-file: {reference.source} cites "
                            f"{reference.cited}:{reference.line}")
             continue
@@ -501,16 +507,22 @@ def repair(root: pathlib.Path = REPO_ROOT, report: Report | None = None) -> tupl
         revision = (_blamed_revision(root, reference.source, citation_line)
                     if citation_line is not None else None)
         if revision is None:
+            if (reference.cited, reference.line) in known:
+                continue
             refused.append(f"unavailable-parent: {reference.source} cites "
                            f"{reference.cited}:{reference.line}")
             continue
         old_line, reason = _revision_line(root, revision, rel, reference.line)
         if old_line is None:
+            if (reference.cited, reference.line) in known:
+                continue
             refused.append(f"{reason}: {reference.source} cites "
                            f"{reference.cited}:{reference.line}")
             continue
         if not _repairable_line(old_line):
-            refused.append(f"changed-content: {reference.source} cites "
+            if (reference.cited, reference.line) in known:
+                continue
+            refused.append(f"weak-anchor: {reference.source} cites "
                            f"{reference.cited}:{reference.line}")
             continue
         target = root / rel
@@ -519,7 +531,9 @@ def repair(root: pathlib.Path = REPO_ROOT, report: Report | None = None) -> tupl
         hi = min(len(current), reference.line - 1 + REPAIR_RADIUS + 1)
         matches = [idx + 1 for idx in range(lo, hi) if current[idx] == old_line]
         if len(matches) != 1:
-            label = "changed-content" if not matches else "ambiguous"
+            label = "no-match" if not matches else "ambiguous"
+            if (reference.cited, reference.line) in known:
+                continue
             refused.append(f"{label}: {reference.source} cites "
                            f"{reference.cited}:{reference.line}")
             continue
@@ -619,7 +633,10 @@ def main(argv: list | None = None) -> int:
             print("repaired: " + item)
         for item in refused:
             print("not repaired: " + item)
-        if not repaired and not refused:
+        recorded = len(report.findings) - len(report.new_findings)
+        if recorded:
+            print(f"suppressed: {recorded} findings already recorded in the ledger")
+        if not repaired and not refused and not recorded:
             print("no stale references to repair")
         remaining = build_report(args.root, args.ledger)
         if remaining.new_findings:
